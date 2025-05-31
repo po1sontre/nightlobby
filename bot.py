@@ -422,10 +422,16 @@ async def on_message(message):
             
         # Check if user is already in a session
         if message.author.id in user_sessions:
-            await message.channel.send(
-                f"❌ {message.author.mention} You're already in an active lobby! "
-                f"Please leave your current session first before creating a new one."
-            )
+            channel_id = user_sessions[message.author.id]
+            existing_channel = bot.get_channel(channel_id)
+            if existing_channel:
+                await message.channel.send(
+                    f"❌ {message.author.mention} You're already in an active lobby! "
+                    f"Please leave your current session first: {existing_channel.mention}"
+                )
+            else:
+                # Clean up stale session
+                del user_sessions[message.author.id]
             return
 
         # Create a new lobby for the user
@@ -472,7 +478,7 @@ async def on_message(message):
             
             embed.add_field(
                 name="Lobby Channel",
-                value=f"#{lobby_channel.name}",
+                value=f"{lobby_channel.mention}",
                 inline=True
             )
             
@@ -507,7 +513,7 @@ async def on_message(message):
             # Notify the user
             await message.channel.send(
                 f"🎮 {message.author.mention} I've created a lobby for you! "
-                f"Click the 'Join Game' button above to join the lobby, or use this link: {lobby_channel.mention}"
+                f"Click here to go to your lobby: {lobby_channel.mention}"
             )
             
         except discord.Forbidden:
@@ -816,25 +822,12 @@ async def lobby_help(ctx):
     
     # Basic Commands
     embed.add_field(
-        name="📋 Basic Commands",
+        name="📋 Commands",
         value=(
             "`/create_game` - Create a new game lobby\n"
             "`/my_lobby` - Check your current lobby status\n"
             "`/lobbies` - List all active lobbies\n"
             "`/invite @user` - Invite a player to your current lobby"
-        ),
-        inline=False
-    )
-    
-    # Lobby Features
-    embed.add_field(
-        name="🎯 Lobby Features",
-        value=(
-            "• Create private lobby channels\n"
-            "• Support for up to 3 players\n"
-            "• Automatic cleanup of inactive lobbies\n"
-            "• Easy join/leave system\n"
-            "• Lobby owner controls"
         ),
         inline=False
     )
@@ -855,7 +848,7 @@ async def lobby_help(ctx):
     embed.add_field(
         name="💡 Tips",
         value=(
-            "• You can also share your Steam code to auto-create a lobby\n"
+            "• Share your Steam code to auto-create a lobby\n"
             "• Check #nightreign-online for game setup\n"
             "• Use `/invite @user` to invite friends directly\n"
             "• Lobbies auto-delete after 5 minutes of being empty"
