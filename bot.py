@@ -472,7 +472,11 @@ async def on_ready():
                     active_lobbies[channel.id] = lobby_data
                     for pid in players:
                         user_sessions[pid] = channel.id
-    cleanup_inactive_lobbies.start()
+    
+    # Start the cleanup task
+    if not cleanup_inactive_lobbies.is_running():
+        cleanup_inactive_lobbies.start()
+        print("Started lobby cleanup task - running every 5 minutes")
 
 @bot.event
 async def on_message(message):
@@ -776,36 +780,45 @@ async def list_lobbies(ctx):
 
 @tasks.loop(minutes=5)
 async def cleanup_inactive_lobbies():
+    """Clean up inactive lobbies that haven't had messages in 3 hours"""
     now = datetime.utcnow()
     to_delete = []
-    for channel_id, lobby_data in list(active_lobbies.items()):
-        channel = bot.get_channel(channel_id)
-        if not channel:
-            continue
-        try:
-            last_message = None
-            async for msg in channel.history(limit=1, oldest_first=False):
-                last_message = msg
-                break
-            if last_message:
-                last_time = last_message.created_at.replace(tzinfo=None)
-                if (now - last_time) > timedelta(hours=3):
-                    to_delete.append(channel_id)
-            else:
-                # No messages at all, use creation time
-                if (now - lobby_data['created_at'].replace(tzinfo=None)) > timedelta(hours=3):
-                    to_delete.append(channel_id)
-        except Exception as e:
-            logger.error(f"Error checking inactivity for channel {channel_id}: {e}")
+    
+    # First check all channels that start with 'lobby-'
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if not channel.name.startswith('lobby-'):
+                continue
+                
+            try:
+                # Get the last message in the channel
+                last_message = None
+                async for msg in channel.history(limit=1, oldest_first=False):
+                    last_message = msg
+                    break
+                
+                # If no messages found or last message is older than 3 hours
+                if not last_message or (now - last_message.created_at.replace(tzinfo=None)) > timedelta(hours=3):
+                    to_delete.append(channel.id)
+                    logger.info(f"Marking channel {channel.name} for deletion - inactive for 3+ hours")
+                    
+            except Exception as e:
+                logger.error(f"Error checking inactivity for channel {channel.name}: {e}")
+    
+    # Delete marked channels and clean up data
     for channel_id in to_delete:
         channel = bot.get_channel(channel_id)
         if channel:
             try:
                 await channel.delete(reason="Inactive lobby (3h no messages)")
+                logger.info(f"Deleted inactive lobby channel: {channel.name}")
             except Exception as e:
                 logger.error(f"Error deleting inactive lobby channel {channel_id}: {e}")
+        
+        # Clean up data structures
         if channel_id in active_lobbies:
             del active_lobbies[channel_id]
+        
         # Remove all user_sessions for this channel
         for uid in list(user_sessions):
             if user_sessions[uid] == channel_id:
