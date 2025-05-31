@@ -565,6 +565,35 @@ async def on_message(message):
                 f"🎮 {message.author.mention} I've created a lobby for you! "
                 f"Click here to go to your lobby: {lobby_channel.mention}"
             )
+            # In both /create_game and Steam friend code detection, after creating the lobby and hash, send the join_embed in the original channel
+            join_embed = discord.Embed(
+                title="🕹️ NightReign Lobby",
+                color=0x00ff00,
+                timestamp=datetime.now()
+            )
+            join_embed.add_field(
+                name="Players (1/3)",
+                value=f"👑 {message.author.display_name if hasattr(message, 'author') else ctx.author.display_name}",
+                inline=False
+            )
+            join_embed.add_field(
+                name="Lobby Channel",
+                value=f"{lobby_channel.mention}",
+                inline=True
+            )
+            join_embed.add_field(
+                name="Status",
+                value="🟢 **OPEN** - Need 2 more players",
+                inline=True
+            )
+            join_embed.add_field(
+                name="How to Join",
+                value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby_hash}```",
+                inline=False
+            )
+            join_embed.set_footer(text="Use the Quick Join command below to join this lobby!")
+            msg = await (message.channel.send if hasattr(message, 'channel') else ctx.send)(embed=join_embed)
+            lobby_data['join_message_id'] = msg.id
         except discord.Forbidden:
             logger.error(f"Permission error creating channel for user {message.author}")
             await message.channel.send("❌ I don't have permission to create channels!")
@@ -644,6 +673,35 @@ async def create_game(ctx):
             inline=False
         )
         await lobby_channel.send(embed=welcome_embed)
+        # In both /create_game and Steam friend code detection, after creating the lobby and hash, send the join_embed in the original channel
+        join_embed = discord.Embed(
+            title="🕹️ NightReign Lobby",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        join_embed.add_field(
+            name="Players (1/3)",
+            value=f"👑 {ctx.author.display_name}",
+            inline=False
+        )
+        join_embed.add_field(
+            name="Lobby Channel",
+            value=f"{lobby_channel.mention}",
+            inline=True
+        )
+        join_embed.add_field(
+            name="Status",
+            value="🟢 **OPEN** - Need 2 more players",
+            inline=True
+        )
+        join_embed.add_field(
+            name="How to Join",
+            value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby_hash}```",
+            inline=False
+        )
+        join_embed.set_footer(text="Use the Quick Join command below to join this lobby!")
+        msg = await ctx.send(embed=join_embed)
+        lobby_data['join_message_id'] = msg.id
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to create channels!")
     except Exception as e:
