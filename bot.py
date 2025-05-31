@@ -826,31 +826,54 @@ async def cleanup_inactive_lobbies():
 
 @bot.command(name='leave_lobby')
 async def leave_lobby(ctx):
+    """Leave the current lobby"""
     user_id = ctx.author.id
+    
+    # First check if they're in the channel they're trying to leave from
+    if ctx.channel.name.startswith('lobby-'):
+        # They're in a lobby channel, check if they have permissions
+        if not ctx.channel.permissions_for(ctx.author).read_messages:
+            await ctx.send("❌ You don't have access to this lobby.")
+            return
+            
+        # Remove their permissions from this channel
+        try:
+            await ctx.channel.set_permissions(ctx.author, overwrite=None)
+            await ctx.channel.send(f"👋 **{ctx.author.display_name}** left the lobby.")
+            await ctx.send("✅ You have left the lobby.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Error removing permissions for user {ctx.author}: {e}")
+            await ctx.send("❌ Error removing you from the lobby.")
+        return
+    
+    # If they're not in a lobby channel, check user_sessions
     if user_id not in user_sessions:
         await ctx.send("❌ You are not in any lobby.")
         return
+        
     channel_id = user_sessions[user_id]
     channel = bot.get_channel(channel_id)
     if not channel:
         del user_sessions[user_id]
         await ctx.send("❌ Your lobby channel no longer exists.")
         return
+        
     # Remove user from active_lobbies if tracked
     lobby = active_lobbies.get(channel_id)
     if lobby and user_id in lobby['players']:
         lobby['players'].remove(user_id)
         if len(lobby['players']) == 0:
             del active_lobbies[channel_id]
+            
     del user_sessions[user_id]
+    
     try:
-        overwrite = discord.PermissionOverwrite()
-        overwrite.read_messages = False
-        await channel.set_permissions(ctx.author, overwrite=overwrite)
-    except Exception:
-        pass
-    await channel.send(f"👋 **{ctx.author.display_name}** left the lobby.")
-    await ctx.send("✅ You have left the lobby.")
+        await channel.set_permissions(ctx.author, overwrite=None)
+        await channel.send(f"👋 **{ctx.author.display_name}** left the lobby.")
+        await ctx.send("✅ You have left the lobby.")
+    except Exception as e:
+        logger.error(f"Error removing permissions for user {ctx.author}: {e}")
+        await ctx.send("❌ Error removing you from the lobby.")
 
 @bot.command(name='end_lobby')
 async def end_lobby(ctx):
