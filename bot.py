@@ -174,6 +174,48 @@ class LobbyChannelView(discord.ui.View):
             overwrite=None
         )
         
+        # Update the lobby message in the original channel
+        try:
+            # Find the original lobby message
+            async for message in interaction.channel.history(limit=10):
+                if message.author == bot.user and "NightReign Lobby" in message.embeds[0].title:
+                    # Update the embed
+                    embed = message.embeds[0]
+                    player_list = []
+                    for i, player_id in enumerate(self.lobby_data['players']):
+                        user = bot.get_user(player_id)
+                        if user:
+                            crown = "👑" if i == 0 else "🎮"
+                            player_list.append(f"{crown} {user.display_name}")
+                    
+                    # Update the players field
+                    for i, field in enumerate(embed.fields):
+                        if "Players" in field.name:
+                            embed.set_field_at(
+                                i,
+                                name=f"Players ({len(self.lobby_data['players'])}/3)",
+                                value="\n".join(player_list) if player_list else "None",
+                                inline=False
+                            )
+                            break
+                    
+                    # Update the status field
+                    for i, field in enumerate(embed.fields):
+                        if "Status" in field.name:
+                            if len(self.lobby_data['players']) >= 3:
+                                status = "🔴 **LOBBY FULL** - Ready to play!"
+                            else:
+                                status = f"🟢 **OPEN** - Need {3 - len(self.lobby_data['players'])} more player(s)"
+                            embed.set_field_at(i, name="Status", value=status, inline=True)
+                            break
+                    
+                    # Update the message
+                    await message.edit(embed=embed)
+                    break
+        except Exception as e:
+            logger.error(f"Error updating lobby message: {str(e)}")
+        
+        # Notify in the lobby channel
         await interaction.response.send_message(
             f"👋 **{interaction.user.display_name}** left the lobby. "
             f"({len(self.lobby_data['players'])}/3 players remaining)"
@@ -185,7 +227,14 @@ class LobbyChannelView(discord.ui.View):
                 empty_lobby_timers[interaction.channel.id] = asyncio.create_task(
                     self._delete_empty_lobby(interaction.channel)
                 )
-                
+        else:
+            # If this was the owner leaving, transfer ownership to the next player
+            if user_id == self.lobby_data['owner'] and self.lobby_data['players']:
+                self.lobby_data['owner'] = self.lobby_data['players'][0]
+                await interaction.channel.send(
+                    f"👑 **{bot.get_user(self.lobby_data['owner']).display_name}** is now the lobby owner!"
+                )
+
     async def _delete_empty_lobby(self, channel):
         await asyncio.sleep(300)  # 5 minutes
         if channel.id in active_lobbies and len(active_lobbies[channel.id]['players']) == 0:
@@ -198,6 +247,111 @@ class LobbyChannelView(discord.ui.View):
             if channel.id in empty_lobby_timers:
                 del empty_lobby_timers[channel.id]
                 
+    @discord.ui.button(label='Invite Player', style=discord.ButtonStyle.blue, emoji='📨')
+    async def invite_player(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Create a modal for entering the username
+        class InviteModal(discord.ui.Modal, title='Invite Player'):
+            username = discord.ui.TextInput(
+                label='Username to invite',
+                placeholder='Enter the username to invite...',
+                required=True,
+                min_length=2,
+                max_length=32
+            )
+
+            async def on_submit(self, interaction: discord.Interaction):
+                username = str(self.username).strip()
+                # Find the user in the guild
+                member = discord.utils.get(interaction.guild.members, name=username)
+                if not member:
+                    await interaction.response.send_message(
+                        f"❌ Could not find user '{username}' in this server.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Check if user is already in a session
+                if member.id in user_sessions:
+                    await interaction.response.send_message(
+                        f"❌ {member.mention} is already in an active lobby!",
+                        ephemeral=True
+                    )
+                    return
+
+                # Check if user is already in this lobby
+                if member.id in self.lobby_data['players']:
+                    await interaction.response.send_message(
+                        f"❌ {member.mention} is already in this lobby!",
+                        ephemeral=True
+                    )
+                    return
+
+                # Check if lobby is full
+                if len(self.lobby_data['players']) >= 3:
+                    await interaction.response.send_message(
+                        "❌ This lobby is full! (3/3 players)",
+                        ephemeral=True
+                    )
+                    return
+
+                # Add player to lobby
+                self.lobby_data['players'].append(member.id)
+                user_sessions[member.id] = interaction.channel.id
+
+                # Add user permissions to the lobby channel
+                await interaction.channel.set_permissions(
+                    member,
+                    read_messages=True,
+                    send_messages=True
+                )
+
+                # Notify in the lobby channel
+                await interaction.channel.send(
+                    f"🎉 **{member.display_name}** was invited and joined the lobby! "
+                    f"({len(self.lobby_data['players'])}/3 players)"
+                )
+
+                # Send DM to invited user
+                try:
+                    invite_embed = discord.Embed(
+                        title="🎮 NightReign Lobby Invitation",
+                        description=f"You've been invited to join a NightReign lobby by {interaction.user.display_name}!",
+                        color=0x00ff00
+                    )
+                    invite_embed.add_field(
+                        name="Lobby Channel",
+                        value=f"#{interaction.channel.name}",
+                        inline=True
+                    )
+                    invite_embed.add_field(
+                        name="Players",
+                        value=f"{len(self.lobby_data['players'])}/3",
+                        inline=True
+                    )
+                    
+                    view = discord.ui.View()
+                    view.add_item(discord.ui.Button(
+                        label="Join Lobby",
+                        style=discord.ButtonStyle.green,
+                        url=f"https://discord.com/channels/{interaction.guild.id}/{interaction.channel.id}"
+                    ))
+                    
+                    await member.send(embed=invite_embed, view=view)
+                except:
+                    await interaction.channel.send(
+                        f"⚠️ Could not send DM to {member.mention}. They may have DMs disabled."
+                    )
+
+                await interaction.response.send_message(
+                    f"✅ Successfully invited {member.mention} to the lobby!",
+                    ephemeral=True
+                )
+
+        # Show the invite modal
+        modal = InviteModal()
+        modal.lobby_data = self.lobby_data
+        await interaction.response.send_modal(modal)
+
     @discord.ui.button(label='End Session', style=discord.ButtonStyle.gray, emoji='🏁')
     async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check if user is owner or has admin/mod permissions
@@ -526,6 +680,107 @@ async def cleanup_stale_sessions():
                 
         if channel_id in active_lobbies:
             del active_lobbies[channel_id]
+
+@bot.command(name='invite')
+async def invite_player(ctx, member: discord.Member):
+    """Invite a player to your current lobby"""
+    user_id = ctx.author.id
+    
+    # Check if the inviter is in a lobby
+    if user_id not in user_sessions:
+        await ctx.send("❌ You're not in any lobby! Create or join a lobby first.", ephemeral=True)
+        return
+        
+    channel_id = user_sessions[user_id]
+    lobby_channel = bot.get_channel(channel_id)
+    
+    if not lobby_channel:
+        del user_sessions[user_id]
+        await ctx.send("❌ Your lobby channel no longer exists.", ephemeral=True)
+        return
+        
+    # Get the lobby data
+    lobby_data = active_lobbies.get(channel_id)
+    if not lobby_data:
+        await ctx.send("❌ Lobby data not found.", ephemeral=True)
+        return
+        
+    # Check if user is already in a session
+    if member.id in user_sessions:
+        await ctx.send(
+            f"❌ {member.mention} is already in an active lobby!",
+            ephemeral=True
+        )
+        return
+
+    # Check if user is already in this lobby
+    if member.id in lobby_data['players']:
+        await ctx.send(
+            f"❌ {member.mention} is already in this lobby!",
+            ephemeral=True
+        )
+        return
+
+    # Check if lobby is full
+    if len(lobby_data['players']) >= 3:
+        await ctx.send(
+            "❌ This lobby is full! (3/3 players)",
+            ephemeral=True
+        )
+        return
+
+    # Add player to lobby
+    lobby_data['players'].append(member.id)
+    user_sessions[member.id] = channel_id
+
+    # Add user permissions to the lobby channel
+    await lobby_channel.set_permissions(
+        member,
+        read_messages=True,
+        send_messages=True
+    )
+
+    # Notify in the lobby channel
+    await lobby_channel.send(
+        f"🎉 **{member.display_name}** was invited and joined the lobby! "
+        f"({len(lobby_data['players'])}/3 players)"
+    )
+
+    # Send DM to invited user
+    try:
+        invite_embed = discord.Embed(
+            title="🎮 NightReign Lobby Invitation",
+            description=f"You've been invited to join a NightReign lobby by {ctx.author.display_name}!",
+            color=0x00ff00
+        )
+        invite_embed.add_field(
+            name="Lobby Channel",
+            value=f"#{lobby_channel.name}",
+            inline=True
+        )
+        invite_embed.add_field(
+            name="Players",
+            value=f"{len(lobby_data['players'])}/3",
+            inline=True
+        )
+        
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(
+            label="Join Lobby",
+            style=discord.ButtonStyle.green,
+            url=f"https://discord.com/channels/{ctx.guild.id}/{lobby_channel.id}"
+        ))
+        
+        await member.send(embed=invite_embed, view=view)
+    except:
+        await lobby_channel.send(
+            f"⚠️ Could not send DM to {member.mention}. They may have DMs disabled."
+        )
+
+    await ctx.send(
+        f"✅ Successfully invited {member.mention} to the lobby!",
+        ephemeral=True
+    )
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
