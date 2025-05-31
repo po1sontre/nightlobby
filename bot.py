@@ -120,6 +120,19 @@ class LobbyView(discord.ui.View):
                 value=f"🟢 **OPEN** - Need {self.max_players - len(active_lobbies[self.lobby_channel.id]['players'])} more player(s)",
                 inline=True
             )
+        # Edit the original Join Game message in the command channel
+        lobby_data = active_lobbies[self.lobby_channel.id]
+        join_msg_id = lobby_data.get('join_message_id')
+        if join_msg_id:
+            for guild in bot.guilds:
+                for channel in guild.text_channels:
+                    try:
+                        msg = await channel.fetch_message(join_msg_id)
+                        await msg.edit(embed=embed, view=self)
+                        return
+                    except Exception:
+                        continue
+        # Fallback: edit the interaction message if original not found
         await interaction.response.edit_message(embed=embed, view=self)
 
 class LobbyChannelView(discord.ui.View):
