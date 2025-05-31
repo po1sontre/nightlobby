@@ -538,37 +538,7 @@ async def on_message(message):
             # Send the hash message in the lobby channel
             hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`\nQuick Join: `/join_lobby {lobby_hash}`")
             lobby_data['hash_message_id'] = hash_msg.id
-            # Send the Join Game button in the original channel (not persistent)
-            join_embed = discord.Embed(
-                title="🕹️ NightReign Lobby",
-                color=0x00ff00,
-                timestamp=datetime.now()
-            )
-            join_embed.add_field(
-                name="Players (1/3)",
-                value=f"👑 {message.author.display_name if hasattr(message, 'author') else ctx.author.display_name}",
-                inline=False
-            )
-            join_embed.add_field(
-                name="Lobby Channel",
-                value=f"{lobby_channel.mention}",
-                inline=True
-            )
-            join_embed.add_field(
-                name="Status",
-                value="🟢 **OPEN** - Need 2 more players",
-                inline=True
-            )
-            join_embed.add_field(
-                name="How to Join",
-                value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby_hash}```",
-                inline=False
-            )
-            join_embed.set_footer(text="Use the Quick Join command below to join this lobby!")
-            msg = await (message.channel.send if hasattr(message, 'channel') else ctx.send)(embed=join_embed)
-            lobby_data['join_message_id'] = msg.id
             # Send welcome message in lobby channel
-            lobby_view = LobbyChannelView(lobby_data)
             welcome_embed = discord.Embed(
                 title="🎉 Welcome to your NightReign Lobby!",
                 description=f"Lobby Hash: `{lobby_hash}`\n\nUse the commands below to manage your lobby:",
@@ -589,7 +559,7 @@ async def on_message(message):
                 value="Share your Steam friend codes, coordinate your game time, and use the commands above to manage your session.",
                 inline=False
             )
-            await lobby_channel.send(embed=welcome_embed, view=lobby_view)
+            await lobby_channel.send(embed=welcome_embed)
             # Notify the user
             await message.channel.send(
                 f"🎮 {message.author.mention} I've created a lobby for you! "
@@ -652,48 +622,28 @@ async def create_game(ctx):
         # Send the hash message in the lobby channel
         hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`\nQuick Join: `/join_lobby {lobby_hash}`")
         lobby_data['hash_message_id'] = hash_msg.id
-        # Send the Join Game button in the original channel (not persistent)
-        join_embed = discord.Embed(
-            title="🕹️ NightReign Lobby",
-            color=0x00ff00,
-            timestamp=datetime.now()
-        )
-        join_embed.add_field(
-            name="Players (1/3)",
-            value=f"👑 {ctx.author.display_name}",
-            inline=False
-        )
-        join_embed.add_field(
-            name="Lobby Channel",
-            value=f"{lobby_channel.mention}",
-            inline=True
-        )
-        join_embed.add_field(
-            name="Status",
-            value="🟢 **OPEN** - Need 2 more players",
-            inline=True
-        )
-        join_embed.add_field(
-            name="How to Join",
-            value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby_hash}```",
-            inline=False
-        )
-        join_embed.set_footer(text="Use the Quick Join command below to join this lobby!")
-        msg = await ctx.send(embed=join_embed)
-        lobby_data['join_message_id'] = msg.id
         # Send welcome message in lobby channel
-        lobby_view = LobbyChannelView(lobby_data)
         welcome_embed = discord.Embed(
             title="🎉 Welcome to your NightReign Lobby!",
-            description="Drop your Steam friend codes here and plan your game.",
+            description=f"Lobby Hash: `{lobby_hash}`\n\nUse the commands below to manage your lobby:",
             color=0x00ff00
         )
         welcome_embed.add_field(
-            name="📋 Instructions",
-            value="• Share your Steam friend codes\n• Coordinate your game time\n• Use 'Leave Lobby' to exit\n• Owner can 'End Session' to close the lobby",
+            name="📋 Lobby Commands",
+            value=(
+                f"• `/join_lobby {lobby_hash}` — Join this lobby\n"
+                f"• `/leave_lobby` — Leave this lobby\n"
+                f"• `/invite_lobby @user` — Invite a user to this lobby\n"
+                f"• `/end_lobby` — End the lobby (owner/mod only)"
+            ),
             inline=False
         )
-        await lobby_channel.send(embed=welcome_embed, view=lobby_view)
+        welcome_embed.add_field(
+            name="Instructions",
+            value="Share your Steam friend codes, coordinate your game time, and use the commands above to manage your session.",
+            inline=False
+        )
+        await lobby_channel.send(embed=welcome_embed)
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to create channels!")
     except Exception as e:
