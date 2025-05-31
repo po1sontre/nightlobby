@@ -559,9 +559,7 @@ async def on_message(message):
             )
             join_embed.add_field(
                 name="How to Join",
-                value=f"**To join this lobby, copy and paste the command below:**\n```
-/join_lobby {lobby_hash}
-```",
+                value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby_hash}```",
                 inline=False
             )
             join_embed.set_footer(text="Click 'Join Game' to join this lobby or use the Quick Join command!")
@@ -669,9 +667,7 @@ async def create_game(ctx):
         )
         join_embed.add_field(
             name="How to Join",
-            value=f"**To join this lobby, copy and paste the command below:**\n```
-/join_lobby {lobby_hash}
-```",
+            value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby_hash}```",
             inline=False
         )
         join_embed.set_footer(text="Click 'Join Game' to join this lobby or use the Quick Join command!")
@@ -1011,9 +1007,7 @@ async def join_lobby(ctx, lobby_hash: str):
                             )
                             embed.add_field(
                                 name="How to Join",
-                                value=f"**To join this lobby, copy and paste the command below:**\n```
-/join_lobby {lobby['hash']}
-```",
+                                value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby['hash']}```",
                                 inline=False
                             )
                             embed.set_footer(text="Click 'Join Game' to join this lobby or use the Quick Join command!")
