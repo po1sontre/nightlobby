@@ -26,6 +26,7 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 # In-memory storage for active lobbies
 active_lobbies = {}
 user_sessions = {}  # Track which users are in active sessions
+empty_lobby_timers = {}  # Track empty lobby timers
 
 # Steam friend code pattern (9-10 digits, can be within text)
 STEAM_CODE_PATTERN = r'(?:^|\s|:)(\d{9,10})(?:\s|$|\.|,|!|\?)'
@@ -44,11 +45,18 @@ class LobbyView(discord.ui.View):
         
         # Check if user is already in a session
         if user_id in user_sessions:
-            await interaction.response.send_message(
-                "❌ You're already in an active lobby! Leave your current session first.",
-                ephemeral=True
-            )
-            return
+            # Verify if the session still exists
+            channel_id = user_sessions[user_id]
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                # Clean up stale session
+                del user_sessions[user_id]
+            else:
+                await interaction.response.send_message(
+                    "❌ You're already in an active lobby! Leave your current session first.",
+                    ephemeral=True
+                )
+                return
             
         # Check if user is already in this lobby
         if user_id in self.players:
@@ -86,6 +94,12 @@ class LobbyView(discord.ui.View):
             f"({len(self.players)}/{self.max_players} players)"
         )
         
+        # Send message to user with channel link
+        await interaction.response.send_message(
+            f"🎮 You've joined the lobby! Click here to go to the channel: {self.lobby_channel.mention}",
+            ephemeral=True
+        )
+
     async def _update_lobby_message(self, interaction):
         # Create updated embed
         embed = discord.Embed(
@@ -165,22 +179,36 @@ class LobbyChannelView(discord.ui.View):
             f"({len(self.lobby_data['players'])}/3 players remaining)"
         )
         
-        # If lobby is empty, delete it
+        # If lobby is empty, start timer for deletion
         if len(self.lobby_data['players']) == 0:
-            await asyncio.sleep(5)
-            await interaction.channel.delete(reason="Empty lobby")
-            if interaction.channel.id in active_lobbies:
-                del active_lobbies[interaction.channel.id]
+            if interaction.channel.id not in empty_lobby_timers:
+                empty_lobby_timers[interaction.channel.id] = asyncio.create_task(
+                    self._delete_empty_lobby(interaction.channel)
+                )
+                
+    async def _delete_empty_lobby(self, channel):
+        await asyncio.sleep(300)  # 5 minutes
+        if channel.id in active_lobbies and len(active_lobbies[channel.id]['players']) == 0:
+            try:
+                await channel.delete(reason="Empty lobby timeout")
+            except:
+                pass
+            if channel.id in active_lobbies:
+                del active_lobbies[channel.id]
+            if channel.id in empty_lobby_timers:
+                del empty_lobby_timers[channel.id]
                 
     @discord.ui.button(label='End Session', style=discord.ButtonStyle.gray, emoji='🏁')
     async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Only lobby owner can end session
+        # Check if user is owner or has admin/mod permissions
         if interaction.user.id != self.lobby_data['owner']:
-            await interaction.response.send_message(
-                "❌ Only the lobby owner can end the session!",
-                ephemeral=True
-            )
-            return
+            # Check for admin/mod permissions
+            if not interaction.user.guild_permissions.administrator and not interaction.user.guild_permissions.manage_channels:
+                await interaction.response.send_message(
+                    "❌ Only the lobby owner or moderators can end the session!",
+                    ephemeral=True
+                )
+                return
             
         await interaction.response.send_message(
             "🏁 **Session ended by lobby owner.** Channel will be deleted in 10 seconds...\n"
@@ -198,6 +226,23 @@ class LobbyChannelView(discord.ui.View):
             
         await asyncio.sleep(10)
         await interaction.channel.delete(reason="Session ended by owner")
+
+class LobbyListButton(discord.ui.View):
+    def __init__(self, lobby_channel):
+        super().__init__(timeout=None)
+        self.lobby_channel = lobby_channel
+        
+    @discord.ui.button(label='Join Lobby', style=discord.ButtonStyle.green, emoji='🎮')
+    async def join_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Get the lobby data
+        lobby_data = active_lobbies.get(self.lobby_channel.id)
+        if not lobby_data:
+            await interaction.response.send_message("❌ This lobby no longer exists.", ephemeral=True)
+            return
+            
+        # Create a temporary view to handle the join
+        view = LobbyView(lobby_data['owner'], self.lobby_channel)
+        await view.join_game(interaction, button)
 
 @bot.event
 async def on_ready():
@@ -446,6 +491,11 @@ async def list_lobbies(ctx):
                 value=f"👑 Owner: {owner_name}\n👥 Players: {len(lobby_data['players'])}/3",
                 inline=True
             )
+            
+            # Add join button for each lobby
+            view = LobbyListButton(channel)
+            await ctx.send(embed=embed, view=view)
+            return  # Send only the first lobby for now (we can modify this to show all)
     
     await ctx.send(embed=embed)
 
