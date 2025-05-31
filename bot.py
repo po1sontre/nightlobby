@@ -526,12 +526,28 @@ async def on_message(message):
             # Send the Join Game button in the original channel (not persistent)
             join_embed = discord.Embed(
                 title="🕹️ NightReign Lobby",
-                description=f"Lobby Hash: `{lobby_hash}`\nClick the button below to join this lobby!",
                 color=0x00ff00,
                 timestamp=datetime.now()
             )
+            join_embed.add_field(
+                name="Players (1/3)",
+                value=f"👑 {message.author.display_name if hasattr(message, 'author') else ctx.author.display_name}",
+                inline=False
+            )
+            join_embed.add_field(
+                name="Lobby Channel",
+                value=f"{lobby_channel.mention}",
+                inline=True
+            )
+            join_embed.add_field(
+                name="Status",
+                value="🟢 **OPEN** - Need 2 more players",
+                inline=True
+            )
+            join_embed.set_footer(text="Click 'Join Game' to join this lobby!")
             view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
-            await message.channel.send(embed=join_embed, view=view)
+            msg = await (message.channel.send if hasattr(message, 'channel') else ctx.send)(embed=join_embed, view=view)
+            bot.add_view(view, message_id=msg.id)
             # Send welcome message in lobby channel
             lobby_view = LobbyChannelView(lobby_data)
             welcome_embed = discord.Embed(
@@ -552,8 +568,6 @@ async def on_message(message):
                 f"🎮 {message.author.mention} I've created a lobby for you! "
                 f"Click here to go to your lobby: {lobby_channel.mention}"
             )
-            # Register the persistent view
-            bot.add_view(view, message_id=hash_msg.id)
         except discord.Forbidden:
             logger.error(f"Permission error creating channel for user {message.author}")
             await message.channel.send("❌ I don't have permission to create channels!")
@@ -614,12 +628,28 @@ async def create_game(ctx):
         # Send the Join Game button in the original channel (not persistent)
         join_embed = discord.Embed(
             title="🕹️ NightReign Lobby",
-            description=f"Lobby Hash: `{lobby_hash}`\nClick the button below to join this lobby!",
             color=0x00ff00,
             timestamp=datetime.now()
         )
+        join_embed.add_field(
+            name="Players (1/3)",
+            value=f"👑 {ctx.author.display_name}",
+            inline=False
+        )
+        join_embed.add_field(
+            name="Lobby Channel",
+            value=f"{lobby_channel.mention}",
+            inline=True
+        )
+        join_embed.add_field(
+            name="Status",
+            value="🟢 **OPEN** - Need 2 more players",
+            inline=True
+        )
+        join_embed.set_footer(text="Click 'Join Game' to join this lobby!")
         view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
-        await ctx.send(embed=join_embed, view=view)
+        msg = await ctx.send(embed=join_embed, view=view)
+        bot.add_view(view, message_id=msg.id)
         # Send welcome message in lobby channel
         lobby_view = LobbyChannelView(lobby_data)
         welcome_embed = discord.Embed(
@@ -633,8 +663,6 @@ async def create_game(ctx):
             inline=False
         )
         await lobby_channel.send(embed=welcome_embed, view=lobby_view)
-        # Register the persistent view
-        bot.add_view(view, message_id=hash_msg.id)
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to create channels!")
     except Exception as e:
