@@ -976,15 +976,15 @@ async def join_lobby(ctx, lobby_hash: str):
                 return
             # Enforce the 3-player limit for tracked lobbies
             if len(lobby['players']) >= 3:
-                await ctx.send("❌ This lobby is full! (3/3 players)")
+                await ctx.send(f"❌ This lobby is full! ({len(lobby['players'])}/3 players)\nPlayers in lobby: {', '.join([bot.get_user(pid).display_name for pid in lobby['players']])}")
                 return
             lobby['players'].append(ctx.author.id)
             user_sessions[ctx.author.id] = channel.id
             await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
             await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! ({len(lobby['players'])}/3 players)")
             await ctx.send(f"🎮 You've joined the lobby! Click here to go to the channel: {channel.mention}")
-            # (embed update code omitted for brevity)
             return
+
     # If not found in active_lobbies, search all text channels for the hash
     for guild in bot.guilds:
         for channel in guild.text_channels:
@@ -992,14 +992,24 @@ async def join_lobby(ctx, lobby_hash: str):
                 async for message in channel.history(limit=20):
                     if message.author == bot.user and message.content and message.content.lower().startswith('lobby hash:'):
                         if input_hash in message.content.lower():
+                            # Check if channel is full by counting members with read permissions
+                            member_count = 0
+                            for member in channel.members:
+                                if channel.permissions_for(member).read_messages and not member.bot:
+                                    member_count += 1
+                            
+                            if member_count >= 3:
+                                await ctx.send(f"❌ This lobby is full! ({member_count}/3 players)\nPlayers in lobby: {', '.join([m.display_name for m in channel.members if channel.permissions_for(m).read_messages and not m.bot])}")
+                                return
+                                
                             # Found the hash in this channel, allow unlimited joins
                             await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
-                            await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! (player count unknown)")
+                            await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! ({member_count + 1}/3 players)")
                             await ctx.send(f"🎮 You've joined the lobby! Click here to go to the channel: {channel.mention}")
                             return
             except Exception:
                 continue
-    print(f"[DEBUG] No lobby found for hash: '{input_hash}'.")
+                
     await ctx.send("❌ No lobby found with that hash.")
 
 # Run the bot
