@@ -1,0 +1,361 @@
+import discord
+from discord.ext import commands, tasks
+import asyncio
+from datetime import datetime, timedelta
+import logging
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+
+# Bot configuration
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
+bot = commands.Bot(command_prefix='/', intents=intents)
+
+# In-memory storage for active lobbies
+active_lobbies = {}
+user_sessions = {}  # Track which users are in active sessions
+
+class LobbyView(discord.ui.View):
+    def __init__(self, owner_id, lobby_channel):
+        super().__init__(timeout=1800)  # 30 minute timeout
+        self.owner_id = owner_id
+        self.lobby_channel = lobby_channel
+        self.players = [owner_id]
+        self.max_players = 3
+        
+    @discord.ui.button(label='Join Game', style=discord.ButtonStyle.green, emoji='🎮')
+    async def join_game(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = interaction.user.id
+        
+        # Check if user is already in a session
+        if user_id in user_sessions:
+            await interaction.response.send_message(
+                "❌ You're already in an active lobby! Leave your current session first.",
+                ephemeral=True
+            )
+            return
+            
+        # Check if user is already in this lobby
+        if user_id in self.players:
+            await interaction.response.send_message(
+                "❌ You're already in this lobby!",
+                ephemeral=True
+            )
+            return
+            
+        # Check if lobby is full
+        if len(self.players) >= self.max_players:
+            await interaction.response.send_message(
+                "❌ This lobby is full! (3/3 players)",
+                ephemeral=True
+            )
+            return
+            
+        # Add player to lobby
+        self.players.append(user_id)
+        user_sessions[user_id] = self.lobby_channel.id
+        
+        # Add user permissions to the lobby channel
+        await self.lobby_channel.set_permissions(
+            interaction.user,
+            read_messages=True,
+            send_messages=True
+        )
+        
+        # Update the embed and button state
+        await self._update_lobby_message(interaction)
+        
+        # Notify in the lobby channel
+        await self.lobby_channel.send(
+            f"🎉 **{interaction.user.display_name}** joined the lobby! "
+            f"({len(self.players)}/{self.max_players} players)"
+        )
+        
+    async def _update_lobby_message(self, interaction):
+        # Create updated embed
+        embed = discord.Embed(
+            title="🕹️ NightReign Lobby",
+            color=0x00ff00 if len(self.players) < self.max_players else 0xff0000,
+            timestamp=datetime.now()
+        )
+        
+        # Add players field
+        player_list = []
+        for i, player_id in enumerate(self.players):
+            user = bot.get_user(player_id)
+            if user:
+                crown = "👑" if i == 0 else "🎮"
+                player_list.append(f"{crown} {user.display_name}")
+        
+        embed.add_field(
+            name=f"Players ({len(self.players)}/{self.max_players})",
+            value="\n".join(player_list) if player_list else "None",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="Lobby Channel",
+            value=f"#{self.lobby_channel.name}",
+            inline=True
+        )
+        
+        # Update button state if lobby is full
+        if len(self.players) >= self.max_players:
+            self.join_game.disabled = True
+            self.join_game.style = discord.ButtonStyle.red
+            self.join_game.label = "Lobby Full"
+            embed.add_field(
+                name="Status",
+                value="🔴 **LOBBY FULL** - Ready to play!",
+                inline=True
+            )
+        else:
+            embed.add_field(
+                name="Status",
+                value=f"🟢 **OPEN** - Need {self.max_players - len(self.players)} more player(s)",
+                inline=True
+            )
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+
+class LobbyChannelView(discord.ui.View):
+    def __init__(self, lobby_data):
+        super().__init__(timeout=None)
+        self.lobby_data = lobby_data
+        
+    @discord.ui.button(label='Leave Lobby', style=discord.ButtonStyle.red, emoji='🚪')
+    async def leave_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = interaction.user.id
+        
+        if user_id not in self.lobby_data['players']:
+            await interaction.response.send_message(
+                "❌ You're not in this lobby!",
+                ephemeral=True
+            )
+            return
+            
+        # Remove player from lobby
+        self.lobby_data['players'].remove(user_id)
+        if user_id in user_sessions:
+            del user_sessions[user_id]
+            
+        # Remove channel permissions
+        await interaction.channel.set_permissions(
+            interaction.user,
+            overwrite=None
+        )
+        
+        await interaction.response.send_message(
+            f"👋 **{interaction.user.display_name}** left the lobby. "
+            f"({len(self.lobby_data['players'])}/3 players remaining)"
+        )
+        
+        # If lobby is empty, delete it
+        if len(self.lobby_data['players']) == 0:
+            await asyncio.sleep(5)
+            await interaction.channel.delete(reason="Empty lobby")
+            if interaction.channel.id in active_lobbies:
+                del active_lobbies[interaction.channel.id]
+                
+    @discord.ui.button(label='End Session', style=discord.ButtonStyle.gray, emoji='🏁')
+    async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only lobby owner can end session
+        if interaction.user.id != self.lobby_data['owner']:
+            await interaction.response.send_message(
+                "❌ Only the lobby owner can end the session!",
+                ephemeral=True
+            )
+            return
+            
+        await interaction.response.send_message(
+            "🏁 **Session ended by lobby owner.** Channel will be deleted in 10 seconds...\n"
+            "GG everyone! 🎮"
+        )
+        
+        # Clean up user sessions
+        for player_id in self.lobby_data['players']:
+            if player_id in user_sessions:
+                del user_sessions[player_id]
+                
+        # Clean up lobby data
+        if interaction.channel.id in active_lobbies:
+            del active_lobbies[interaction.channel.id]
+            
+        await asyncio.sleep(10)
+        await interaction.channel.delete(reason="Session ended by owner")
+
+@bot.event
+async def on_ready():
+    print(f'{bot.user} has connected to Discord!')
+    cleanup_stale_sessions.start()
+
+@bot.command(name='create_game')
+async def create_game(ctx):
+    """Create a new NightReign lobby"""
+    user_id = ctx.author.id
+    
+    # Check if user already has an active session
+    if user_id in user_sessions:
+        await ctx.send("❌ You already have an active lobby! Leave it first before creating a new one.", ephemeral=True)
+        return
+        
+    try:
+        # Create private lobby channel
+        overwrites = {
+            ctx.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            ctx.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        
+        channel_name = f"lobby-{ctx.author.display_name.lower()}-{datetime.now().strftime('%H%M')}"
+        lobby_channel = await ctx.guild.create_text_channel(
+            channel_name,
+            overwrites=overwrites,
+            category=None,  # You can set a specific category if needed
+            reason=f"NightReign lobby created by {ctx.author}"
+        )
+        
+        # Store lobby data
+        lobby_data = {
+            'owner': user_id,
+            'players': [user_id],
+            'channel': lobby_channel.id,
+            'created_at': datetime.now()
+        }
+        active_lobbies[lobby_channel.id] = lobby_data
+        user_sessions[user_id] = lobby_channel.id
+        
+        # Create and send lobby embed in the original channel
+        embed = discord.Embed(
+            title="🕹️ NightReign Lobby",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        
+        embed.add_field(
+            name="Players (1/3)",
+            value=f"👑 {ctx.author.display_name}",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="Lobby Channel",
+            value=f"#{lobby_channel.name}",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="Status",
+            value="🟢 **OPEN** - Need 2 more players",
+            inline=True
+        )
+        
+        embed.set_footer(text="Click 'Join Game' to join this lobby!")
+        
+        view = LobbyView(user_id, lobby_channel)
+        await ctx.send(embed=embed, view=view)
+        
+        # Send welcome message in lobby channel
+        lobby_view = LobbyChannelView(lobby_data)
+        welcome_embed = discord.Embed(
+            title="🎉 Welcome to your NightReign Lobby!",
+            description="Drop your Steam friend codes here and plan your game.",
+            color=0x00ff00
+        )
+        welcome_embed.add_field(
+            name="📋 Instructions",
+            value="• Share your Steam friend codes\n• Coordinate your game time\n• Use 'Leave Lobby' to exit\n• Owner can 'End Session' to close the lobby",
+            inline=False
+        )
+        
+        await lobby_channel.send(embed=welcome_embed, view=lobby_view)
+        
+    except discord.Forbidden:
+        await ctx.send("❌ I don't have permission to create channels!")
+    except Exception as e:
+        await ctx.send(f"❌ Error creating lobby: {str(e)}")
+
+@bot.command(name='my_lobby')
+async def my_lobby(ctx):
+    """Check your current lobby status"""
+    user_id = ctx.author.id
+    
+    if user_id not in user_sessions:
+        await ctx.send("❌ You don't have an active lobby.")
+        return
+        
+    channel_id = user_sessions[user_id]
+    lobby_channel = bot.get_channel(channel_id)
+    
+    if not lobby_channel:
+        # Clean up stale session
+        del user_sessions[user_id]
+        await ctx.send("❌ Your lobby channel no longer exists.")
+        return
+        
+    await ctx.send(f"🎮 Your active lobby: {lobby_channel.mention}")
+
+@bot.command(name='lobbies')
+async def list_lobbies(ctx):
+    """List all active lobbies"""
+    if not active_lobbies:
+        await ctx.send("🔍 No active lobbies found.")
+        return
+        
+    embed = discord.Embed(
+        title="🕹️ Active NightReign Lobbies",
+        color=0x00ff00,
+        timestamp=datetime.now()
+    )
+    
+    for channel_id, lobby_data in active_lobbies.items():
+        channel = bot.get_channel(channel_id)
+        if channel:
+            owner = bot.get_user(lobby_data['owner'])
+            owner_name = owner.display_name if owner else "Unknown"
+            
+            embed.add_field(
+                name=f"#{channel.name}",
+                value=f"👑 Owner: {owner_name}\n👥 Players: {len(lobby_data['players'])}/3",
+                inline=True
+            )
+    
+    await ctx.send(embed=embed)
+
+@tasks.loop(minutes=5)
+async def cleanup_stale_sessions():
+    """Clean up stale sessions every 5 minutes"""
+    current_time = datetime.now()
+    stale_lobbies = []
+    
+    for channel_id, lobby_data in active_lobbies.items():
+        # Remove lobbies older than 2 hours
+        if current_time - lobby_data['created_at'] > timedelta(hours=2):
+            stale_lobbies.append(channel_id)
+            
+    for channel_id in stale_lobbies:
+        channel = bot.get_channel(channel_id)
+        if channel:
+            try:
+                await channel.delete(reason="Stale lobby cleanup")
+            except:
+                pass
+                
+        # Clean up data
+        lobby_data = active_lobbies.get(channel_id, {})
+        for player_id in lobby_data.get('players', []):
+            if player_id in user_sessions:
+                del user_sessions[player_id]
+                
+        if channel_id in active_lobbies:
+            del active_lobbies[channel_id]
+
+# Run the bot
+bot.run(os.getenv('DISCORD_TOKEN'))
