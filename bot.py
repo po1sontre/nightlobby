@@ -950,8 +950,13 @@ async def lobby_help(ctx):
 @bot.command(name='join_lobby')
 async def join_lobby(ctx, lobby_hash: str):
     """Join a lobby by its hash."""
+    # Normalize the input hash
+    input_hash = lobby_hash.strip().lower()
+    found = False
     for lobby in active_lobbies.values():
-        if lobby['hash'] == lobby_hash:
+        stored_hash = str(lobby['hash']).strip().lower()
+        if stored_hash == input_hash:
+            found = True
             channel = bot.get_channel(lobby['channel'])
             if not channel:
                 await ctx.send("❌ That lobby no longer exists.")
@@ -1011,14 +1016,16 @@ async def join_lobby(ctx, lobby_hash: str):
                                 inline=False
                             )
                             embed.set_footer(text="Click 'Join Game' to join this lobby or use the Quick Join command!")
-                            # Update the view/button state
                             view = LobbyView(lobby['owner'], channel, lobby['hash'])
                             await msg.edit(embed=embed, view=view)
                             return
                         except Exception:
                             continue
             return
-    await ctx.send("❌ No lobby found with that hash.")
+    if not found:
+        # Debug logging for troubleshooting
+        print(f"[DEBUG] No lobby found for hash: '{input_hash}'. Active lobbies: {[l['hash'] for l in active_lobbies.values()]}")
+        await ctx.send("❌ No lobby found with that hash.")
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
