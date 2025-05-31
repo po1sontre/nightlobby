@@ -28,56 +28,9 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 active_lobbies = {}
 user_sessions = {}  # Track which users are in active sessions
 empty_lobby_timers = {}  # Track empty lobby timers
-db_channel = None  # Will store reference to the database channel
 
 # Steam friend code pattern (9-10 digits, can be within text)
 STEAM_CODE_PATTERN = r'(?:^|\s|:)(\d{9,10})(?:\s|$|\.|,|!|\?)'
-
-async def save_lobby_state():
-    """Save current lobby state to the database channel"""
-    if not db_channel:
-        return
-        
-    # Clear previous messages
-    async for message in db_channel.history(limit=100):
-        await message.delete()
-        
-    # Create new state message
-    state = {
-        'active_lobbies': active_lobbies,
-        'user_sessions': user_sessions,
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    # Send state as JSON
-    await db_channel.send(json.dumps(state, indent=2))
-
-async def load_lobby_state():
-    """Load lobby state from the database channel"""
-    if not db_channel:
-        return
-        
-    async for message in db_channel.history(limit=1):
-        try:
-            state = json.loads(message.content)
-            active_lobbies.clear()
-            user_sessions.clear()
-            
-            # Convert string keys back to integers
-            for channel_id, lobby_data in state['active_lobbies'].items():
-                active_lobbies[int(channel_id)] = {
-                    'owner': int(lobby_data['owner']),
-                    'players': [int(p) for p in lobby_data['players']],
-                    'channel': int(lobby_data['channel']),
-                    'created_at': datetime.fromisoformat(lobby_data['created_at'])
-                }
-                
-            for user_id, channel_id in state['user_sessions'].items():
-                user_sessions[int(user_id)] = int(channel_id)
-                
-            logger.info(f"Loaded state with {len(active_lobbies)} lobbies and {len(user_sessions)} user sessions")
-        except Exception as e:
-            logger.error(f"Error loading state: {str(e)}")
 
 class LobbyView(discord.ui.View):
     def __init__(self, owner_id, lobby_channel):
@@ -156,9 +109,6 @@ class LobbyView(discord.ui.View):
             f"🎮 You've joined the lobby! Click here to go to the channel: {self.lobby_channel.mention}",
             ephemeral=True
         )
-        
-        # Save state to database
-        await save_lobby_state()
 
     async def _update_lobby_message(self, interaction):
         # Create updated embed
@@ -317,9 +267,6 @@ class LobbyChannelView(discord.ui.View):
             f"✅ You have left the lobby.",
             ephemeral=True
         )
-        
-        # Save state to database
-        await save_lobby_state()
 
     async def _delete_empty_lobby(self, channel):
         await asyncio.sleep(300)  # 5 minutes
@@ -511,31 +458,7 @@ class LobbyListButton(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
-    
-    # Find or create 'Bot Data' category
-    global db_channel
-    for guild in bot.guilds:
-        bot_data_category = discord.utils.get(guild.categories, name='Bot Data')
-        if not bot_data_category:
-            bot_data_category = await guild.create_category('Bot Data')
-        db_channel = discord.utils.get(guild.text_channels, name='lobby-database')
-        if not db_channel:
-            # Create the database channel in the Bot Data category
-            db_channel = await guild.create_text_channel(
-                'lobby-database',
-                overwrites={
-                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                },
-                category=bot_data_category
-            )
-        break
-    
-    # Load state from database
-    await load_lobby_state()
-    
-    # Start cleanup task
-    cleanup_stale_sessions.start()
+    cleanup_inactive_lobbies.start()
 
 @bot.event
 async def on_message(message):
@@ -639,8 +562,6 @@ async def on_message(message):
                 f"🎮 {message.author.mention} I've created a lobby for you! "
                 f"Click here to go to your lobby: {lobby_channel.mention}"
             )
-            # Save state after lobby creation
-            await save_lobby_state()
         except discord.Forbidden:
             logger.error(f"Permission error creating channel for user {message.author}")
             await message.channel.send("❌ I don't have permission to create channels!")
@@ -729,8 +650,6 @@ async def create_game(ctx):
             inline=False
         )
         await lobby_channel.send(embed=welcome_embed, view=lobby_view)
-        # Save state after lobby creation
-        await save_lobby_state()
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to create channels!")
     except Exception as e:
@@ -807,35 +726,41 @@ async def list_lobbies(ctx):
     await ctx.send(embed=embed)
 
 @tasks.loop(minutes=5)
-async def cleanup_stale_sessions():
-    """Clean up stale sessions every 5 minutes"""
-    current_time = datetime.now()
-    stale_lobbies = []
-    
-    for channel_id, lobby_data in active_lobbies.items():
-        # Remove lobbies older than 2 hours
-        if current_time - lobby_data['created_at'] > timedelta(hours=2):
-            stale_lobbies.append(channel_id)
-            
-    for channel_id in stale_lobbies:
+async def cleanup_inactive_lobbies():
+    now = datetime.utcnow()
+    to_delete = []
+    for channel_id, lobby_data in list(active_lobbies.items()):
+        channel = bot.get_channel(channel_id)
+        if not channel:
+            continue
+        try:
+            last_message = None
+            async for msg in channel.history(limit=1, oldest_first=False):
+                last_message = msg
+                break
+            if last_message:
+                last_time = last_message.created_at.replace(tzinfo=None)
+                if (now - last_time) > timedelta(hours=3):
+                    to_delete.append(channel_id)
+            else:
+                # No messages at all, use creation time
+                if (now - lobby_data['created_at'].replace(tzinfo=None)) > timedelta(hours=3):
+                    to_delete.append(channel_id)
+        except Exception as e:
+            logger.error(f"Error checking inactivity for channel {channel_id}: {e}")
+    for channel_id in to_delete:
         channel = bot.get_channel(channel_id)
         if channel:
             try:
-                await channel.delete(reason="Stale lobby cleanup")
-            except:
-                pass
-                
-        # Clean up data
-        lobby_data = active_lobbies.get(channel_id, {})
-        for player_id in lobby_data.get('players', []):
-            if player_id in user_sessions:
-                del user_sessions[player_id]
-                
+                await channel.delete(reason="Inactive lobby (3h no messages)")
+            except Exception as e:
+                logger.error(f"Error deleting inactive lobby channel {channel_id}: {e}")
         if channel_id in active_lobbies:
             del active_lobbies[channel_id]
-    
-    # Save state after cleanup
-    await save_lobby_state()
+        # Remove all user_sessions for this channel
+        for uid in list(user_sessions):
+            if user_sessions[uid] == channel_id:
+                del user_sessions[uid]
 
 @bot.command(name='invite')
 async def invite_player(ctx, member: discord.Member):
