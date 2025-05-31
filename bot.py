@@ -485,6 +485,16 @@ async def on_ready():
                     active_lobbies[channel.id] = lobby_data
                     for pid in players:
                         user_sessions[pid] = channel.id
+                    # Re-register the LobbyView for the latest bot message with the lobby embed
+                    try:
+                        async for message in channel.history(limit=20):
+                            if message.author == bot.user and message.embeds:
+                                embed = message.embeds[0]
+                                if embed.title and 'NightReign Lobby' in embed.title:
+                                    bot.add_view(LobbyView(owner_id, channel), message_id=message.id)
+                                    break
+                    except Exception as e:
+                        logger.error(f'Error re-registering LobbyView for channel {channel.id}: {e}')
     cleanup_inactive_lobbies.start()
 
 @bot.event
