@@ -512,18 +512,22 @@ class LobbyListButton(discord.ui.View):
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
-    # Find or create database channel
+    # Find or create 'Bot Data' category
     global db_channel
     for guild in bot.guilds:
+        bot_data_category = discord.utils.get(guild.categories, name='Bot Data')
+        if not bot_data_category:
+            bot_data_category = await guild.create_category('Bot Data')
         db_channel = discord.utils.get(guild.text_channels, name='lobby-database')
         if not db_channel:
-            # Create the database channel
+            # Create the database channel in the Bot Data category
             db_channel = await guild.create_text_channel(
                 'lobby-database',
                 overwrites={
                     guild.default_role: discord.PermissionOverwrite(read_messages=False),
                     guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                }
+                },
+                category=bot_data_category
             )
         break
     
@@ -566,23 +570,22 @@ async def on_message(message):
 
         # Create a new lobby for the user
         try:
-            # Create private lobby channel
+            # Create private lobby channel OUTSIDE the Bot Data category
             overwrites = {
                 message.guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 message.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
                 bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
             }
-            
+            # Find the 'Bot Data' category to avoid it
+            bot_data_category = discord.utils.get(message.guild.categories, name='Bot Data')
             channel_name = f"lobby-{message.author.display_name.lower()}-{datetime.now().strftime('%H%M')}"
             lobby_channel = await message.guild.create_text_channel(
                 channel_name,
                 overwrites=overwrites,
-                category=None,
+                category=None if not bot_data_category else None,  # Explicitly not in Bot Data
                 reason=f"NightReign lobby created by {message.author}"
             )
-            
             logger.info(f"Created new lobby channel {channel_name} for user {message.author}")
-            
             # Store lobby data
             lobby_data = {
                 'owner': message.author.id,
@@ -592,37 +595,30 @@ async def on_message(message):
             }
             active_lobbies[lobby_channel.id] = lobby_data
             user_sessions[message.author.id] = lobby_channel.id
-            
             # Create and send lobby embed
             embed = discord.Embed(
                 title="🕹️ NightReign Lobby",
                 color=0x00ff00,
                 timestamp=datetime.now()
             )
-            
             embed.add_field(
                 name="Players (1/3)",
                 value=f"👑 {message.author.display_name}",
                 inline=False
             )
-            
             embed.add_field(
                 name="Lobby Channel",
                 value=f"{lobby_channel.mention}",
                 inline=True
             )
-            
             embed.add_field(
                 name="Status",
                 value="🟢 **OPEN** - Need 2 more players",
                 inline=True
             )
-            
             embed.set_footer(text="Click 'Join Game' to join this lobby!")
-            
             view = LobbyView(message.author.id, lobby_channel)
             await message.channel.send(embed=embed, view=view)
-            
             # Send welcome message in lobby channel
             lobby_view = LobbyChannelView(lobby_data)
             welcome_embed = discord.Embed(
@@ -637,22 +633,20 @@ async def on_message(message):
                 value="• Share your Steam friend codes\n• Coordinate your game time\n• Use 'Leave Lobby' to exit\n• Owner can 'End Session' to close the lobby",
                 inline=False
             )
-            
             await lobby_channel.send(embed=welcome_embed, view=lobby_view)
-            
             # Notify the user
             await message.channel.send(
                 f"🎮 {message.author.mention} I've created a lobby for you! "
                 f"Click here to go to your lobby: {lobby_channel.mention}"
             )
-            
+            # Save state after lobby creation
+            await save_lobby_state()
         except discord.Forbidden:
             logger.error(f"Permission error creating channel for user {message.author}")
             await message.channel.send("❌ I don't have permission to create channels!")
         except Exception as e:
             logger.error(f"Error creating lobby for user {message.author}: {str(e)}")
             await message.channel.send(f"❌ Error creating lobby: {str(e)}")
-
     # Process commands after checking for Steam codes
     await bot.process_commands(message)
 
@@ -660,7 +654,6 @@ async def on_message(message):
 async def create_game(ctx):
     """Create a new NightReign lobby"""
     user_id = ctx.author.id
-    
     # Check if user already has an active session
     if user_id in user_sessions:
         channel_id = user_sessions[user_id]
@@ -674,23 +667,22 @@ async def create_game(ctx):
             # Clean up stale session
             del user_sessions[user_id]
         return
-        
     try:
-        # Create private lobby channel
+        # Create private lobby channel OUTSIDE the Bot Data category
         overwrites = {
             ctx.guild.default_role: discord.PermissionOverwrite(read_messages=False),
             ctx.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
-        
+        # Find the 'Bot Data' category to avoid it
+        bot_data_category = discord.utils.get(ctx.guild.categories, name='Bot Data')
         channel_name = f"lobby-{ctx.author.display_name.lower()}-{datetime.now().strftime('%H%M')}"
         lobby_channel = await ctx.guild.create_text_channel(
             channel_name,
             overwrites=overwrites,
-            category=None,  # You can set a specific category if needed
+            category=None if not bot_data_category else None,  # Explicitly not in Bot Data
             reason=f"NightReign lobby created by {ctx.author}"
         )
-        
         # Store lobby data
         lobby_data = {
             'owner': user_id,
@@ -700,37 +692,30 @@ async def create_game(ctx):
         }
         active_lobbies[lobby_channel.id] = lobby_data
         user_sessions[user_id] = lobby_channel.id
-        
         # Create and send lobby embed in the original channel
         embed = discord.Embed(
             title="🕹️ NightReign Lobby",
             color=0x00ff00,
             timestamp=datetime.now()
         )
-        
         embed.add_field(
             name="Players (1/3)",
             value=f"👑 {ctx.author.display_name}",
             inline=False
         )
-        
         embed.add_field(
             name="Lobby Channel",
             value=f"{lobby_channel.mention}",
             inline=True
         )
-        
         embed.add_field(
             name="Status",
             value="🟢 **OPEN** - Need 2 more players",
             inline=True
         )
-        
         embed.set_footer(text="Click 'Join Game' to join this lobby!")
-        
         view = LobbyView(user_id, lobby_channel)
         await ctx.send(embed=embed, view=view)
-        
         # Send welcome message in lobby channel
         lobby_view = LobbyChannelView(lobby_data)
         welcome_embed = discord.Embed(
@@ -743,9 +728,9 @@ async def create_game(ctx):
             value="• Share your Steam friend codes\n• Coordinate your game time\n• Use 'Leave Lobby' to exit\n• Owner can 'End Session' to close the lobby",
             inline=False
         )
-        
         await lobby_channel.send(embed=welcome_embed, view=lobby_view)
-        
+        # Save state after lobby creation
+        await save_lobby_state()
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to create channels!")
     except Exception as e:
