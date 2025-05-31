@@ -6,6 +6,7 @@ import logging
 import os
 from dotenv import load_dotenv
 import re
+import json
 
 # Load environment variables
 load_dotenv()
@@ -27,9 +28,56 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 active_lobbies = {}
 user_sessions = {}  # Track which users are in active sessions
 empty_lobby_timers = {}  # Track empty lobby timers
+db_channel = None  # Will store reference to the database channel
 
 # Steam friend code pattern (9-10 digits, can be within text)
 STEAM_CODE_PATTERN = r'(?:^|\s|:)(\d{9,10})(?:\s|$|\.|,|!|\?)'
+
+async def save_lobby_state():
+    """Save current lobby state to the database channel"""
+    if not db_channel:
+        return
+        
+    # Clear previous messages
+    async for message in db_channel.history(limit=100):
+        await message.delete()
+        
+    # Create new state message
+    state = {
+        'active_lobbies': active_lobbies,
+        'user_sessions': user_sessions,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    # Send state as JSON
+    await db_channel.send(json.dumps(state, indent=2))
+
+async def load_lobby_state():
+    """Load lobby state from the database channel"""
+    if not db_channel:
+        return
+        
+    async for message in db_channel.history(limit=1):
+        try:
+            state = json.loads(message.content)
+            active_lobbies.clear()
+            user_sessions.clear()
+            
+            # Convert string keys back to integers
+            for channel_id, lobby_data in state['active_lobbies'].items():
+                active_lobbies[int(channel_id)] = {
+                    'owner': int(lobby_data['owner']),
+                    'players': [int(p) for p in lobby_data['players']],
+                    'channel': int(lobby_data['channel']),
+                    'created_at': datetime.fromisoformat(lobby_data['created_at'])
+                }
+                
+            for user_id, channel_id in state['user_sessions'].items():
+                user_sessions[int(user_id)] = int(channel_id)
+                
+            logger.info(f"Loaded state with {len(active_lobbies)} lobbies and {len(user_sessions)} user sessions")
+        except Exception as e:
+            logger.error(f"Error loading state: {str(e)}")
 
 class LobbyView(discord.ui.View):
     def __init__(self, owner_id, lobby_channel):
@@ -79,6 +127,14 @@ class LobbyView(discord.ui.View):
         self.players.append(user_id)
         user_sessions[user_id] = self.lobby_channel.id
         
+        # Update active_lobbies
+        active_lobbies[self.lobby_channel.id] = {
+            'owner': self.owner_id,
+            'players': self.players,
+            'channel': self.lobby_channel.id,
+            'created_at': datetime.now()
+        }
+        
         # Add user permissions to the lobby channel
         await self.lobby_channel.set_permissions(
             interaction.user,
@@ -95,20 +151,14 @@ class LobbyView(discord.ui.View):
             f"({len(self.players)}/{self.max_players} players)"
         )
         
-        # Create a view with a button to go to the lobby channel
-        view = discord.ui.View()
-        view.add_item(discord.ui.Button(
-            label="Go to Lobby Channel",
-            style=discord.ButtonStyle.green,
-            url=f"https://discord.com/channels/{interaction.guild.id}/{self.lobby_channel.id}"
-        ))
-        
-        # Send message to user with channel link and button
+        # Send ephemeral message with channel mention
         await interaction.followup.send(
-            f"🎮 You've joined the lobby! Click the button below to go to the channel: {self.lobby_channel.mention}",
-            view=view,
+            f"🎮 You've joined the lobby! Click here to go to the channel: {self.lobby_channel.mention}",
             ephemeral=True
         )
+        
+        # Save state to database
+        await save_lobby_state()
 
     async def _update_lobby_message(self, interaction):
         # Create updated embed
@@ -178,12 +228,18 @@ class LobbyChannelView(discord.ui.View):
         # Always defer the interaction immediately
         await interaction.response.defer(ephemeral=True)
         
-        # Remove player from all relevant places, even if not in the list
+        # Remove player from all relevant places
         was_in_lobby = user_id in players
         if was_in_lobby:
             players.remove(user_id)
         if user_id in user_sessions:
             del user_sessions[user_id]
+        
+        # Update active_lobbies
+        if channel_id in active_lobbies:
+            active_lobbies[channel_id]['players'] = players
+            if len(players) == 0:
+                del active_lobbies[channel_id]
         
         # Always remove channel permissions
         try:
@@ -198,10 +254,8 @@ class LobbyChannelView(discord.ui.View):
         
         # Update the lobby message in the original channel
         try:
-            # Find the original lobby message
             async for message in interaction.channel.history(limit=10):
                 if message.author == bot.user and "NightReign Lobby" in message.embeds[0].title:
-                    # Update the embed
                     embed = message.embeds[0]
                     player_list = []
                     for i, player_id in enumerate(players):
@@ -209,7 +263,6 @@ class LobbyChannelView(discord.ui.View):
                         if user:
                             crown = "👑" if i == 0 else "🎮"
                             player_list.append(f"{crown} {user.display_name}")
-                    # Update the players field
                     for i, field in enumerate(embed.fields):
                         if "Players" in field.name:
                             embed.set_field_at(
@@ -219,7 +272,6 @@ class LobbyChannelView(discord.ui.View):
                                 inline=False
                             )
                             break
-                    # Update the status field
                     for i, field in enumerate(embed.fields):
                         if "Status" in field.name:
                             if len(players) >= 3:
@@ -228,7 +280,6 @@ class LobbyChannelView(discord.ui.View):
                                 status = f"🟢 **OPEN** - Need {3 - len(players)} more player(s)"
                             embed.set_field_at(i, name="Status", value=status, inline=True)
                             break
-                    # Update the message
                     await message.edit(embed=embed)
                     break
         except Exception as e:
@@ -237,6 +288,8 @@ class LobbyChannelView(discord.ui.View):
         # If this was the owner leaving, transfer ownership to the next player
         if was_in_lobby and user_id == self.lobby_data['owner'] and players:
             self.lobby_data['owner'] = players[0]
+            if channel_id in active_lobbies:
+                active_lobbies[channel_id]['owner'] = players[0]
             await interaction.channel.send(
                 f"👑 **{bot.get_user(self.lobby_data['owner']).display_name}** is now the lobby owner!"
             )
@@ -264,6 +317,9 @@ class LobbyChannelView(discord.ui.View):
             f"✅ You have left the lobby.",
             ephemeral=True
         )
+        
+        # Save state to database
+        await save_lobby_state()
 
     async def _delete_empty_lobby(self, channel):
         await asyncio.sleep(300)  # 5 minutes
@@ -455,41 +511,27 @@ class LobbyListButton(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
-    await rebuild_lobbies_from_channels()
-    cleanup_stale_sessions.start()
-
-async def rebuild_lobbies_from_channels():
-    print('Rebuilding lobbies from channels...')
-    active_lobbies.clear()
-    user_sessions.clear()
+    
+    # Find or create database channel
+    global db_channel
     for guild in bot.guilds:
-        for channel in guild.text_channels:
-            if channel.name.startswith('lobby-'):
-                # Try to find the owner: the first member with send/read permissions (besides the bot)
-                overwrites = channel.overwrites
-                owner_id = None
-                players = []
-                for member in channel.members:
-                    perms = channel.permissions_for(member)
-                    if perms.read_messages and perms.send_messages and not member.bot:
-                        players.append(member.id)
-                        if owner_id is None:
-                            owner_id = member.id
-                if owner_id is None and players:
-                    owner_id = players[0]
-                if owner_id:
-                    lobby_data = {
-                        'owner': owner_id,
-                        'players': players,
-                        'channel': channel.id,
-                        'created_at': datetime.now()  # Can't recover original, so use now
-                    }
-                    active_lobbies[channel.id] = lobby_data
-                    for pid in players:
-                        user_sessions[pid] = channel.id
-                    # Register persistent view for this lobby
-                    bot.add_view(LobbyView(owner_id, channel))
-    print(f'Rebuilt {len(active_lobbies)} lobbies.')
+        db_channel = discord.utils.get(guild.text_channels, name='lobby-database')
+        if not db_channel:
+            # Create the database channel
+            db_channel = await guild.create_text_channel(
+                'lobby-database',
+                overwrites={
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                }
+            )
+        break
+    
+    # Load state from database
+    await load_lobby_state()
+    
+    # Start cleanup task
+    cleanup_stale_sessions.start()
 
 @bot.event
 async def on_message(message):
@@ -806,6 +848,9 @@ async def cleanup_stale_sessions():
                 
         if channel_id in active_lobbies:
             del active_lobbies[channel_id]
+    
+    # Save state after cleanup
+    await save_lobby_state()
 
 @bot.command(name='invite')
 async def invite_player(ctx, member: discord.Member):
