@@ -415,6 +415,11 @@ async def on_message(message):
     if steam_codes:
         logger.info(f"Detected Steam code(s) in message from {message.author}: {steam_codes}")
         
+        # Skip Steam code detection in private lobby channels
+        if message.channel.name.startswith('lobby-'):
+            await bot.process_commands(message)
+            return
+            
         # Check if user is already in a session
         if message.author.id in user_sessions:
             await message.channel.send(
@@ -640,9 +645,27 @@ async def list_lobbies(ctx):
             owner = bot.get_user(lobby_data['owner'])
             owner_name = owner.display_name if owner else "Unknown"
             
+            # Get player list, excluding owner and mods
+            player_list = []
+            for player_id in lobby_data['players']:
+                player = bot.get_user(player_id)
+                if player:
+                    # Check if player is owner or has mod permissions
+                    member = channel.guild.get_member(player_id)
+                    if member and player_id != lobby_data['owner'] and not member.guild_permissions.administrator and not member.guild_permissions.manage_channels:
+                        player_list.append(player.display_name)
+            
+            # Create player count string
+            player_count = f"{len(player_list)}/3"
+            status = "🔴 FULL" if len(player_list) >= 3 else "🟢 OPEN"
+            
             embed.add_field(
                 name=f"#{channel.name}",
-                value=f"👑 Owner: {owner_name}\n👥 Players: {len(lobby_data['players'])}/3",
+                value=(
+                    f"👑 Owner: {owner_name}\n"
+                    f"👥 Players: {player_count} {status}\n"
+                    f"🎮 Players: {', '.join(player_list) if player_list else 'None'}"
+                ),
                 inline=True
             )
             
@@ -781,6 +804,68 @@ async def invite_player(ctx, member: discord.Member):
         f"✅ Successfully invited {member.mention} to the lobby!",
         ephemeral=True
     )
+
+@bot.command(name='lobbyhelp')
+async def lobby_help(ctx):
+    """Show all available lobby commands and their usage"""
+    embed = discord.Embed(
+        title="🎮 NightReign Lobby Bot Commands",
+        description="Here are all the available commands for the NightReign Lobby Bot:",
+        color=0x00ff00
+    )
+    
+    # Basic Commands
+    embed.add_field(
+        name="📋 Basic Commands",
+        value=(
+            "`/create_game` - Create a new game lobby\n"
+            "`/my_lobby` - Check your current lobby status\n"
+            "`/lobbies` - List all active lobbies\n"
+            "`/invite @user` - Invite a player to your current lobby"
+        ),
+        inline=False
+    )
+    
+    # Lobby Features
+    embed.add_field(
+        name="🎯 Lobby Features",
+        value=(
+            "• Create private lobby channels\n"
+            "• Support for up to 3 players\n"
+            "• Automatic cleanup of inactive lobbies\n"
+            "• Easy join/leave system\n"
+            "• Lobby owner controls"
+        ),
+        inline=False
+    )
+    
+    # Quick Start
+    embed.add_field(
+        name="🚀 Quick Start",
+        value=(
+            "1. Type `/create_game` to create a lobby\n"
+            "2. Share your Steam friend code in the lobby\n"
+            "3. Use the 'Join Game' button to join others' lobbies\n"
+            "4. Use 'Leave Lobby' when you're done"
+        ),
+        inline=False
+    )
+    
+    # Tips
+    embed.add_field(
+        name="💡 Tips",
+        value=(
+            "• You can also share your Steam code to auto-create a lobby\n"
+            "• Check #nightreign-online for game setup\n"
+            "• Use `/invite @user` to invite friends directly\n"
+            "• Lobbies auto-delete after 5 minutes of being empty"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="Need more help? Contact a moderator!")
+    
+    await ctx.send(embed=embed)
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
