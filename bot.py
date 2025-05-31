@@ -287,7 +287,9 @@ async def on_message(message):
             lobby_view = LobbyChannelView(lobby_data)
             welcome_embed = discord.Embed(
                 title="🎉 Welcome to your NightReign Lobby!",
-                description=f"Your Steam friend code: {steam_codes[0]}\n\nDrop your Steam friend codes here and plan your game.",
+                description=f"Your Steam friend code: {steam_codes[0]}\n\n"
+                           f"Drop your Steam friend codes here and plan your game.\n\n"
+                           f"📢 Check #nightreign-online to get everything working!",
                 color=0x00ff00
             )
             welcome_embed.add_field(
@@ -301,7 +303,7 @@ async def on_message(message):
             # Notify the user
             await message.channel.send(
                 f"🎮 {message.author.mention} I've created a lobby for you! "
-                f"Please join the dedicated game chat: {lobby_channel.mention}"
+                f"Click the 'Join Game' button above to join the lobby, or use this link: {lobby_channel.mention}"
             )
             
         except discord.Forbidden:
