@@ -247,7 +247,7 @@ class LobbyChannelView(discord.ui.View):
             if channel.id in empty_lobby_timers:
                 del empty_lobby_timers[channel.id]
                 
-    @discord.ui.button(label='Invite Player', style=discord.ButtonStyle.blue, emoji='📨')
+    @discord.ui.button(label='Invite Player', style=discord.ButtonStyle.primary, emoji='📨')
     async def invite_player(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Create a modal for entering the username
         class InviteModal(discord.ui.Modal, title='Invite Player'):
