@@ -5,12 +5,17 @@ from datetime import datetime, timedelta
 import logging
 import os
 from dotenv import load_dotenv
+import re
 
 # Load environment variables
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Bot configuration
 intents = discord.Intents.default()
@@ -21,6 +26,9 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 # In-memory storage for active lobbies
 active_lobbies = {}
 user_sessions = {}  # Track which users are in active sessions
+
+# Steam friend code pattern (9-10 digits, can be within text)
+STEAM_CODE_PATTERN = r'(?:^|\s|:)(\d{9,10})(?:\s|$|\.|,|!|\?)'
 
 class LobbyView(discord.ui.View):
     def __init__(self, owner_id, lobby_channel):
@@ -195,6 +203,116 @@ class LobbyChannelView(discord.ui.View):
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     cleanup_stale_sessions.start()
+
+@bot.event
+async def on_message(message):
+    # Don't respond to our own messages
+    if message.author == bot.user:
+        return
+
+    # Check if the message contains a Steam friend code
+    steam_codes = re.findall(STEAM_CODE_PATTERN, message.content)
+    
+    if steam_codes:
+        logger.info(f"Detected Steam code(s) in message from {message.author}: {steam_codes}")
+        
+        # Check if user is already in a session
+        if message.author.id in user_sessions:
+            await message.channel.send(
+                f"❌ {message.author.mention} You're already in an active lobby! "
+                f"Please leave your current session first before creating a new one."
+            )
+            return
+
+        # Create a new lobby for the user
+        try:
+            # Create private lobby channel
+            overwrites = {
+                message.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                message.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+            
+            channel_name = f"lobby-{message.author.display_name.lower()}-{datetime.now().strftime('%H%M')}"
+            lobby_channel = await message.guild.create_text_channel(
+                channel_name,
+                overwrites=overwrites,
+                category=None,
+                reason=f"NightReign lobby created by {message.author}"
+            )
+            
+            logger.info(f"Created new lobby channel {channel_name} for user {message.author}")
+            
+            # Store lobby data
+            lobby_data = {
+                'owner': message.author.id,
+                'players': [message.author.id],
+                'channel': lobby_channel.id,
+                'created_at': datetime.now()
+            }
+            active_lobbies[lobby_channel.id] = lobby_data
+            user_sessions[message.author.id] = lobby_channel.id
+            
+            # Create and send lobby embed
+            embed = discord.Embed(
+                title="🕹️ NightReign Lobby",
+                color=0x00ff00,
+                timestamp=datetime.now()
+            )
+            
+            embed.add_field(
+                name="Players (1/3)",
+                value=f"👑 {message.author.display_name}",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="Lobby Channel",
+                value=f"#{lobby_channel.name}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="Status",
+                value="🟢 **OPEN** - Need 2 more players",
+                inline=True
+            )
+            
+            embed.set_footer(text="Click 'Join Game' to join this lobby!")
+            
+            view = LobbyView(message.author.id, lobby_channel)
+            await message.channel.send(embed=embed, view=view)
+            
+            # Send welcome message in lobby channel
+            lobby_view = LobbyChannelView(lobby_data)
+            welcome_embed = discord.Embed(
+                title="🎉 Welcome to your NightReign Lobby!",
+                description=f"Your Steam friend code: {steam_codes[0]}\n\nDrop your Steam friend codes here and plan your game.",
+                color=0x00ff00
+            )
+            welcome_embed.add_field(
+                name="📋 Instructions",
+                value="• Share your Steam friend codes\n• Coordinate your game time\n• Use 'Leave Lobby' to exit\n• Owner can 'End Session' to close the lobby",
+                inline=False
+            )
+            
+            await lobby_channel.send(embed=welcome_embed, view=lobby_view)
+            
+            # Notify the user
+            await message.channel.send(
+                f"🎮 {message.author.mention} I've created a lobby for you! "
+                f"Please join the dedicated game chat: {lobby_channel.mention}"
+            )
+            
+        except discord.Forbidden:
+            logger.error(f"Permission error creating channel for user {message.author}")
+            await message.channel.send("❌ I don't have permission to create channels!")
+        except Exception as e:
+            logger.error(f"Error creating lobby for user {message.author}: {str(e)}")
+            await message.channel.send(f"❌ Error creating lobby: {str(e)}")
+
+    # Process commands after checking for Steam codes
+    await bot.process_commands(message)
 
 @bot.command(name='create_game')
 async def create_game(ctx):
