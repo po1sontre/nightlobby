@@ -714,53 +714,50 @@ async def my_lobby(ctx):
 
 @bot.command(name='lobbies')
 async def list_lobbies(ctx):
-    """List all active lobbies"""
+    """List all active lobbies with accurate player stats and join buttons"""
     if not active_lobbies:
         await ctx.send("🔍 No active lobbies found.")
         return
-        
     embed = discord.Embed(
         title="🕹️ Active NightReign Lobbies",
         color=0x00ff00,
         timestamp=datetime.now()
     )
-    
     for channel_id, lobby_data in active_lobbies.items():
         channel = bot.get_channel(channel_id)
-        if channel:
-            owner = bot.get_user(lobby_data['owner'])
-            owner_name = owner.display_name if owner else "Unknown"
-            
-            # Get player list, excluding owner and mods
-            player_list = []
-            for player_id in lobby_data['players']:
-                player = bot.get_user(player_id)
-                if player:
-                    # Check if player is owner or has mod permissions
-                    member = channel.guild.get_member(player_id)
-                    if member and player_id != lobby_data['owner'] and not member.guild_permissions.administrator and not member.guild_permissions.manage_channels:
-                        player_list.append(player.display_name)
-            
-            # Create player count string
-            player_count = f"{len(player_list)}/3"
-            status = "🔴 FULL" if len(player_list) >= 3 else "🟢 OPEN"
-            
-            embed.add_field(
-                name=f"#{channel.name}",
-                value=(
-                    f"👑 Owner: {owner_name}\n"
-                    f"👥 Players: {player_count} {status}\n"
-                    f"🎮 Players: {', '.join(player_list) if player_list else 'None'}"
-                ),
-                inline=True
-            )
-            
-            # Add join button for each lobby
-            view = LobbyListButton(channel)
-            await ctx.send(embed=embed, view=view)
-            return  # Send only the first lobby for now (we can modify this to show all)
-    
-    await ctx.send(embed=embed)
+        if not channel:
+            continue
+        owner = bot.get_user(lobby_data['owner'])
+        owner_name = owner.display_name if owner else "Unknown"
+        # Get player list, excluding owner, mods, and bots
+        player_list = []
+        real_player_count = 0
+        for player_id in lobby_data['players']:
+            member = channel.guild.get_member(player_id)
+            if member and not member.bot and not member.guild_permissions.administrator and not member.guild_permissions.manage_channels:
+                player_list.append(member.display_name)
+                real_player_count += 1
+        # Create player count string
+        player_count = f"{real_player_count}/3"
+        status = "🔴 FULL" if real_player_count >= 3 else "🟢 OPEN"
+        embed.add_field(
+            name=f"#{channel.name}",
+            value=(
+                f"👑 Owner: {owner_name}\n"
+                f"👥 Players: {player_count} {status}\n"
+                f"🎮 Players: {', '.join(player_list) if player_list else 'None'}"
+            ),
+            inline=False
+        )
+        # Add a fresh join button for this lobby
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(
+            label="Join Lobby",
+            style=discord.ButtonStyle.green,
+            url=f"https://discord.com/channels/{ctx.guild.id}/{channel.id}"
+        ))
+        await ctx.send(embed=embed, view=view)
+        embed = discord.Embed()  # Reset for next lobby
 
 @tasks.loop(minutes=5)
 async def cleanup_inactive_lobbies():
