@@ -174,18 +174,18 @@ class LobbyChannelView(discord.ui.View):
         channel_id = interaction.channel.id
         players = self.get_live_players(channel_id)
         
+        # Always defer the interaction immediately
+        await interaction.response.defer(ephemeral=True)
+        
         # Check if user is in the lobby
         if user_id not in players:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ You're not in this lobby!",
                 ephemeral=True
             )
             return
 
         try:
-            # Acknowledge the interaction first to prevent timeout
-            await interaction.response.defer()
-            
             # Remove player from lobby
             players.remove(user_id)
             if user_id in user_sessions:
@@ -193,9 +193,12 @@ class LobbyChannelView(discord.ui.View):
                 
             # Remove channel permissions
             try:
+                # Explicitly deny read_messages for the user
+                overwrite = discord.PermissionOverwrite()
+                overwrite.read_messages = False
                 await interaction.channel.set_permissions(
                     interaction.user,
-                    overwrite=None
+                    overwrite=overwrite
                 )
             except discord.Forbidden:
                 logger.error(f"Could not remove permissions for user {interaction.user}")
@@ -261,9 +264,13 @@ class LobbyChannelView(discord.ui.View):
                         self._delete_empty_lobby(interaction.channel)
                     )
                     
+            # Confirm to the user
+            await interaction.followup.send(
+                f"✅ You have left the lobby.",
+                ephemeral=True
+            )
         except Exception as e:
             logger.error(f"Error in leave_lobby: {str(e)}")
-            # Try to send error message if interaction hasn't been responded to
             try:
                 await interaction.followup.send(
                     "❌ An error occurred while leaving the lobby. Please try again.",
