@@ -41,106 +41,68 @@ class LobbyView(discord.ui.View):
         self.lobby_hash = lobby_hash
         self.max_players = 3
         
-    @discord.ui.button(label='Join Game', style=discord.ButtonStyle.green, emoji='🎮')
+    @discord.ui.button(label='Join Game', style=discord.ButtonStyle.green, emoji='🎮', custom_id='join_game_button')
     async def join_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
+        lobby = active_lobbies.get(self.lobby_channel.id)
+        if not lobby:
+            await interaction.response.send_message("❌ This lobby no longer exists.", ephemeral=True)
+            return
+        players = lobby['players']
         await interaction.response.defer(ephemeral=True)
-        
-        # Check if user is already in a session
-        if user_id in user_sessions:
-            # Verify if the session still exists
-            channel_id = user_sessions[user_id]
-            channel = bot.get_channel(channel_id)
-            if not channel:
-                # Clean up stale session
-                del user_sessions[user_id]
-            else:
-                await interaction.followup.send(
-                    f"❌ You're already in an active lobby! Leave your current session first: {channel.mention}",
-                    ephemeral=True
-                )
-                return
-        
-        # Check if user is already in this lobby
-        if user_id in self.players:
+        if user_id in players:
             await interaction.followup.send(
                 "❌ You're already in this lobby!",
                 ephemeral=True
             )
             return
-        
-        # Check if lobby is full
-        if len(self.players) >= self.max_players:
+        if len(players) >= self.max_players:
             await interaction.followup.send(
                 "❌ This lobby is full! (3/3 players)",
                 ephemeral=True
             )
             return
-        
-        # Add player to lobby
-        self.players.append(user_id)
+        players.append(user_id)
+        lobby['players'] = players
         user_sessions[user_id] = self.lobby_channel.id
-        
-        # Update active_lobbies
-        active_lobbies[self.lobby_channel.id] = {
-            'owner': self.owner_id,
-            'players': self.players,
-            'channel': self.lobby_channel.id,
-            'created_at': datetime.now()
-        }
-        
-        # Add user permissions to the lobby channel
         await self.lobby_channel.set_permissions(
             interaction.user,
             read_messages=True,
             send_messages=True
         )
-        
-        # Update the embed and button state
         await self._update_lobby_message(interaction)
-        
-        # Notify in the lobby channel
         await self.lobby_channel.send(
             f"🎉 **{interaction.user.display_name}** joined the lobby! "
-            f"({len(self.players)}/{self.max_players} players)"
+            f"({len(players)}/{self.max_players} players)"
         )
-        
-        # Send ephemeral message with channel mention
         await interaction.followup.send(
             f"🎮 You've joined the lobby! Click here to go to the channel: {self.lobby_channel.mention}",
             ephemeral=True
         )
 
     async def _update_lobby_message(self, interaction):
-        # Create updated embed
         embed = discord.Embed(
             title="🕹️ NightReign Lobby",
-            color=0x00ff00 if len(self.players) < self.max_players else 0xff0000,
+            color=0x00ff00 if len(active_lobbies[self.lobby_channel.id]['players']) < self.max_players else 0xff0000,
             timestamp=datetime.now()
         )
-        
-        # Add players field
         player_list = []
-        for i, player_id in enumerate(self.players):
+        for i, player_id in enumerate(active_lobbies[self.lobby_channel.id]['players']):
             user = bot.get_user(player_id)
             if user:
                 crown = "👑" if i == 0 else "🎮"
                 player_list.append(f"{crown} {user.display_name}")
-        
         embed.add_field(
-            name=f"Players ({len(self.players)}/{self.max_players})",
+            name=f"Players ({len(active_lobbies[self.lobby_channel.id]['players'])}/{self.max_players})",
             value="\n".join(player_list) if player_list else "None",
             inline=False
         )
-        
         embed.add_field(
             name="Lobby Channel",
             value=f"#{self.lobby_channel.name}",
             inline=True
         )
-        
-        # Update button state if lobby is full
-        if len(self.players) >= self.max_players:
+        if len(active_lobbies[self.lobby_channel.id]['players']) >= self.max_players:
             self.join_game.disabled = True
             self.join_game.style = discord.ButtonStyle.red
             self.join_game.label = "Lobby Full"
@@ -150,12 +112,14 @@ class LobbyView(discord.ui.View):
                 inline=True
             )
         else:
+            self.join_game.disabled = False
+            self.join_game.style = discord.ButtonStyle.green
+            self.join_game.label = "Join Game"
             embed.add_field(
                 name="Status",
-                value=f"🟢 **OPEN** - Need {self.max_players - len(self.players)} more player(s)",
+                value=f"🟢 **OPEN** - Need {self.max_players - len(active_lobbies[self.lobby_channel.id]['players'])} more player(s)",
                 inline=True
             )
-        
         await interaction.response.edit_message(embed=embed, view=self)
 
 class LobbyChannelView(discord.ui.View):
@@ -588,6 +552,8 @@ async def on_message(message):
                 f"🎮 {message.author.mention} I've created a lobby for you! "
                 f"Click here to go to your lobby: {lobby_channel.mention}"
             )
+            # Register the persistent view
+            bot.add_view(view, message_id=hash_msg.id)
         except discord.Forbidden:
             logger.error(f"Permission error creating channel for user {message.author}")
             await message.channel.send("❌ I don't have permission to create channels!")
@@ -667,6 +633,8 @@ async def create_game(ctx):
             inline=False
         )
         await lobby_channel.send(embed=welcome_embed, view=lobby_view)
+        # Register the persistent view
+        bot.add_view(view, message_id=hash_msg.id)
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to create channels!")
     except Exception as e:
