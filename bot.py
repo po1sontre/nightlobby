@@ -458,6 +458,33 @@ class LobbyListButton(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
+    # Rebuild active_lobbies and user_sessions from existing lobby channels
+    active_lobbies.clear()
+    user_sessions.clear()
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channel.name.startswith('lobby-'):
+                # Find all members with read/send permissions (excluding the bot)
+                players = []
+                owner_id = None
+                for member in channel.members:
+                    perms = channel.permissions_for(member)
+                    if perms.read_messages and perms.send_messages and not member.bot:
+                        players.append(member.id)
+                        if owner_id is None:
+                            owner_id = member.id
+                if owner_id is None and players:
+                    owner_id = players[0]
+                if owner_id:
+                    lobby_data = {
+                        'owner': owner_id,
+                        'players': players,
+                        'channel': channel.id,
+                        'created_at': datetime.utcnow()  # Can't recover original, so use now
+                    }
+                    active_lobbies[channel.id] = lobby_data
+                    for pid in players:
+                        user_sessions[pid] = channel.id
     cleanup_inactive_lobbies.start()
 
 @bot.event
