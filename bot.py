@@ -455,7 +455,41 @@ class LobbyListButton(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
+    await rebuild_lobbies_from_channels()
     cleanup_stale_sessions.start()
+
+async def rebuild_lobbies_from_channels():
+    print('Rebuilding lobbies from channels...')
+    active_lobbies.clear()
+    user_sessions.clear()
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channel.name.startswith('lobby-'):
+                # Try to find the owner: the first member with send/read permissions (besides the bot)
+                overwrites = channel.overwrites
+                owner_id = None
+                players = []
+                for member in channel.members:
+                    perms = channel.permissions_for(member)
+                    if perms.read_messages and perms.send_messages and not member.bot:
+                        players.append(member.id)
+                        if owner_id is None:
+                            owner_id = member.id
+                if owner_id is None and players:
+                    owner_id = players[0]
+                if owner_id:
+                    lobby_data = {
+                        'owner': owner_id,
+                        'players': players,
+                        'channel': channel.id,
+                        'created_at': datetime.now()  # Can't recover original, so use now
+                    }
+                    active_lobbies[channel.id] = lobby_data
+                    for pid in players:
+                        user_sessions[pid] = channel.id
+                    # Register persistent view for this lobby
+                    bot.add_view(LobbyView(owner_id, channel))
+    print(f'Rebuilt {len(active_lobbies)} lobbies.')
 
 @bot.event
 async def on_message(message):
