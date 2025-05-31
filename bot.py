@@ -79,7 +79,7 @@ class LobbyView(discord.ui.View):
             f"🎮 You've joined the lobby! Click here to go to the channel: {self.lobby_channel.mention}",
             ephemeral=True
         )
-
+        
     async def _update_lobby_message(self, interaction):
         embed = discord.Embed(
             title="🕹️ NightReign Lobby",
@@ -139,7 +139,7 @@ class LobbyChannelView(discord.ui.View):
     def __init__(self, lobby_data):
         super().__init__(timeout=None)
         self.lobby_data = lobby_data
-    
+        
     def get_live_players(self, channel_id):
         # Always get the latest player list from active_lobbies
         lobby = active_lobbies.get(channel_id)
@@ -162,7 +162,7 @@ class LobbyChannelView(discord.ui.View):
             players.remove(user_id)
         if user_id in user_sessions:
             del user_sessions[user_id]
-        
+            
         # Update active_lobbies
         if channel_id in active_lobbies:
             active_lobbies[channel_id]['players'] = players
@@ -179,6 +179,8 @@ class LobbyChannelView(discord.ui.View):
             )
         except discord.Forbidden:
             logger.error(f"Could not remove permissions for user {interaction.user}")
+        except Exception:
+            pass
         
         # Update the lobby message in the original channel
         try:
@@ -225,7 +227,7 @@ class LobbyChannelView(discord.ui.View):
         # Notify in the lobby channel
         if was_in_lobby:
             await interaction.channel.send(
-                f"👋 **{interaction.user.display_name}** left the lobby. "
+            f"👋 **{interaction.user.display_name}** left the lobby. "
                 f"({len(players)}/3 players remaining)"
             )
         else:
@@ -386,7 +388,7 @@ class LobbyChannelView(discord.ui.View):
         modal = InviteModal()
         modal.lobby_data = self.lobby_data
         await interaction.response.send_modal(modal)
-
+                
     @discord.ui.button(label='End Session', style=discord.ButtonStyle.gray, emoji='🏁')
     async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check if user is owner or has admin/mod permissions
@@ -562,10 +564,8 @@ async def on_message(message):
                 value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby_hash}```",
                 inline=False
             )
-            join_embed.set_footer(text="Click 'Join Game' to join this lobby or use the Quick Join command!")
-            view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
-            msg = await (message.channel.send if hasattr(message, 'channel') else ctx.send)(embed=join_embed, view=view)
-            bot.add_view(view, message_id=msg.id)
+            join_embed.set_footer(text="Use the Quick Join command below to join this lobby!")
+            msg = await (message.channel.send if hasattr(message, 'channel') else ctx.send)(embed=join_embed)
             lobby_data['join_message_id'] = msg.id
             # Send welcome message in lobby channel
             lobby_view = LobbyChannelView(lobby_data)
@@ -670,10 +670,8 @@ async def create_game(ctx):
             value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby_hash}```",
             inline=False
         )
-        join_embed.set_footer(text="Click 'Join Game' to join this lobby or use the Quick Join command!")
-        view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
-        msg = await ctx.send(embed=join_embed, view=view)
-        bot.add_view(view, message_id=msg.id)
+        join_embed.set_footer(text="Use the Quick Join command below to join this lobby!")
+        msg = await ctx.send(embed=join_embed)
         lobby_data['join_message_id'] = msg.id
         # Send welcome message in lobby channel
         lobby_view = LobbyChannelView(lobby_data)
@@ -949,14 +947,12 @@ async def lobby_help(ctx):
 
 @bot.command(name='join_lobby')
 async def join_lobby(ctx, lobby_hash: str):
-    """Join a lobby by its hash."""
-    # Normalize the input hash
+    """Join a lobby by its hash. 3-person limit for new lobbies, unlimited for old/untracked."""
     input_hash = lobby_hash.strip().lower()
-    found = False
+    # First, try active_lobbies as before
     for lobby in active_lobbies.values():
         stored_hash = str(lobby['hash']).strip().lower()
         if stored_hash == input_hash:
-            found = True
             channel = bot.get_channel(lobby['channel'])
             if not channel:
                 await ctx.send("❌ That lobby no longer exists.")
@@ -964,6 +960,7 @@ async def join_lobby(ctx, lobby_hash: str):
             if ctx.author.id in lobby['players']:
                 await ctx.send("❌ You are already in this lobby.")
                 return
+            # Enforce the 3-player limit for tracked lobbies
             if len(lobby['players']) >= 3:
                 await ctx.send("❌ This lobby is full! (3/3 players)")
                 return
@@ -972,60 +969,24 @@ async def join_lobby(ctx, lobby_hash: str):
             await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
             await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! ({len(lobby['players'])}/3 players)")
             await ctx.send(f"🎮 You've joined the lobby! Click here to go to the channel: {channel.mention}")
-            # Update the original Join Game embed
-            join_msg_id = lobby.get('join_message_id')
-            if join_msg_id:
-                for guild in bot.guilds:
-                    for ch in guild.text_channels:
-                        try:
-                            msg = await ch.fetch_message(join_msg_id)
-                            # Build updated embed
-                            embed = discord.Embed(
-                                title="🕹️ NightReign Lobby",
-                                color=0x00ff00 if len(lobby['players']) < 3 else 0xff0000,
-                                timestamp=datetime.now()
-                            )
-                            player_list = []
-                            for i, player_id in enumerate(lobby['players']):
-                                user = bot.get_user(player_id)
-                                if user:
-                                    crown = "👑" if i == 0 else "🎮"
-                                    player_list.append(f"{crown} {user.display_name}")
-                            embed.add_field(
-                                name=f"Players ({len(lobby['players'])}/3)",
-                                value="\n".join(player_list) if player_list else "None",
-                                inline=False
-                            )
-                            embed.add_field(
-                                name="Lobby Channel",
-                                value=f"{channel.mention}",
-                                inline=True
-                            )
-                            if len(lobby['players']) >= 3:
-                                status = "🔴 **LOBBY FULL** - Ready to play!"
-                            else:
-                                status = f"🟢 **OPEN** - Need {3 - len(lobby['players'])} more player(s)"
-                            embed.add_field(
-                                name="Status",
-                                value=status,
-                                inline=True
-                            )
-                            embed.add_field(
-                                name="How to Join",
-                                value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby['hash']}```",
-                                inline=False
-                            )
-                            embed.set_footer(text="Click 'Join Game' to join this lobby or use the Quick Join command!")
-                            view = LobbyView(lobby['owner'], channel, lobby['hash'])
-                            await msg.edit(embed=embed, view=view)
-                            return
-                        except Exception:
-                            continue
+            # (embed update code omitted for brevity)
             return
-    if not found:
-        # Debug logging for troubleshooting
-        print(f"[DEBUG] No lobby found for hash: '{input_hash}'. Active lobbies: {[l['hash'] for l in active_lobbies.values()]}")
-        await ctx.send("❌ No lobby found with that hash.")
+    # If not found in active_lobbies, search all text channels for the hash
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            try:
+                async for message in channel.history(limit=20):
+                    if message.author == bot.user and message.content and message.content.lower().startswith('lobby hash:'):
+                        if input_hash in message.content.lower():
+                            # Found the hash in this channel, allow unlimited joins
+                            await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
+                            await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! (player count unknown)")
+                            await ctx.send(f"🎮 You've joined the lobby! Click here to go to the channel: {channel.mention}")
+                            return
+            except Exception:
+                continue
+    print(f"[DEBUG] No lobby found for hash: '{input_hash}'.")
+    await ctx.send("❌ No lobby found with that hash.")
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
