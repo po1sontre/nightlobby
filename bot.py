@@ -53,7 +53,7 @@ class LobbyView(discord.ui.View):
                 del user_sessions[user_id]
             else:
                 await interaction.response.send_message(
-                    "❌ You're already in an active lobby! Leave your current session first.",
+                    f"❌ You're already in an active lobby! Leave your current session first: {channel.mention}",
                     ephemeral=True
                 )
                 return
@@ -94,9 +94,18 @@ class LobbyView(discord.ui.View):
             f"({len(self.players)}/{self.max_players} players)"
         )
         
-        # Send message to user with channel link
+        # Create a view with a button to go to the lobby channel
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(
+            label="Go to Lobby Channel",
+            style=discord.ButtonStyle.green,
+            url=f"https://discord.com/channels/{interaction.guild.id}/{self.lobby_channel.id}"
+        ))
+        
+        # Send message to user with channel link and button
         await interaction.response.send_message(
-            f"🎮 You've joined the lobby! Click here to go to the channel: {self.lobby_channel.mention}",
+            f"🎮 You've joined the lobby! Click the button below to go to the channel: {self.lobby_channel.mention}",
+            view=view,
             ephemeral=True
         )
 
@@ -156,84 +165,103 @@ class LobbyChannelView(discord.ui.View):
     async def leave_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
         
+        # Check if user is in the lobby
         if user_id not in self.lobby_data['players']:
             await interaction.response.send_message(
                 "❌ You're not in this lobby!",
                 ephemeral=True
             )
             return
-            
-        # Remove player from lobby
-        self.lobby_data['players'].remove(user_id)
-        if user_id in user_sessions:
-            del user_sessions[user_id]
-            
-        # Remove channel permissions
-        await interaction.channel.set_permissions(
-            interaction.user,
-            overwrite=None
-        )
-        
-        # Update the lobby message in the original channel
+
         try:
-            # Find the original lobby message
-            async for message in interaction.channel.history(limit=10):
-                if message.author == bot.user and "NightReign Lobby" in message.embeds[0].title:
-                    # Update the embed
-                    embed = message.embeds[0]
-                    player_list = []
-                    for i, player_id in enumerate(self.lobby_data['players']):
-                        user = bot.get_user(player_id)
-                        if user:
-                            crown = "👑" if i == 0 else "🎮"
-                            player_list.append(f"{crown} {user.display_name}")
-                    
-                    # Update the players field
-                    for i, field in enumerate(embed.fields):
-                        if "Players" in field.name:
-                            embed.set_field_at(
-                                i,
-                                name=f"Players ({len(self.lobby_data['players'])}/3)",
-                                value="\n".join(player_list) if player_list else "None",
-                                inline=False
-                            )
-                            break
-                    
-                    # Update the status field
-                    for i, field in enumerate(embed.fields):
-                        if "Status" in field.name:
-                            if len(self.lobby_data['players']) >= 3:
-                                status = "🔴 **LOBBY FULL** - Ready to play!"
-                            else:
-                                status = f"🟢 **OPEN** - Need {3 - len(self.lobby_data['players'])} more player(s)"
-                            embed.set_field_at(i, name="Status", value=status, inline=True)
-                            break
-                    
-                    # Update the message
-                    await message.edit(embed=embed)
-                    break
-        except Exception as e:
-            logger.error(f"Error updating lobby message: {str(e)}")
-        
-        # Notify in the lobby channel
-        await interaction.response.send_message(
-            f"👋 **{interaction.user.display_name}** left the lobby. "
-            f"({len(self.lobby_data['players'])}/3 players remaining)"
-        )
-        
-        # If lobby is empty, start timer for deletion
-        if len(self.lobby_data['players']) == 0:
-            if interaction.channel.id not in empty_lobby_timers:
-                empty_lobby_timers[interaction.channel.id] = asyncio.create_task(
-                    self._delete_empty_lobby(interaction.channel)
+            # Acknowledge the interaction first to prevent timeout
+            await interaction.response.defer()
+            
+            # Remove player from lobby
+            self.lobby_data['players'].remove(user_id)
+            if user_id in user_sessions:
+                del user_sessions[user_id]
+                
+            # Remove channel permissions
+            try:
+                await interaction.channel.set_permissions(
+                    interaction.user,
+                    overwrite=None
                 )
-        else:
+            except discord.Forbidden:
+                logger.error(f"Could not remove permissions for user {interaction.user}")
+            
+            # Update the lobby message in the original channel
+            try:
+                # Find the original lobby message
+                async for message in interaction.channel.history(limit=10):
+                    if message.author == bot.user and "NightReign Lobby" in message.embeds[0].title:
+                        # Update the embed
+                        embed = message.embeds[0]
+                        player_list = []
+                        for i, player_id in enumerate(self.lobby_data['players']):
+                            user = bot.get_user(player_id)
+                            if user:
+                                crown = "👑" if i == 0 else "🎮"
+                                player_list.append(f"{crown} {user.display_name}")
+                        
+                        # Update the players field
+                        for i, field in enumerate(embed.fields):
+                            if "Players" in field.name:
+                                embed.set_field_at(
+                                    i,
+                                    name=f"Players ({len(self.lobby_data['players'])}/3)",
+                                    value="\n".join(player_list) if player_list else "None",
+                                    inline=False
+                                )
+                                break
+                        
+                        # Update the status field
+                        for i, field in enumerate(embed.fields):
+                            if "Status" in field.name:
+                                if len(self.lobby_data['players']) >= 3:
+                                    status = "🔴 **LOBBY FULL** - Ready to play!"
+                                else:
+                                    status = f"🟢 **OPEN** - Need {3 - len(self.lobby_data['players'])} more player(s)"
+                                embed.set_field_at(i, name="Status", value=status, inline=True)
+                                break
+                        
+                        # Update the message
+                        await message.edit(embed=embed)
+                        break
+            except Exception as e:
+                logger.error(f"Error updating lobby message: {str(e)}")
+            
             # If this was the owner leaving, transfer ownership to the next player
             if user_id == self.lobby_data['owner'] and self.lobby_data['players']:
                 self.lobby_data['owner'] = self.lobby_data['players'][0]
                 await interaction.channel.send(
                     f"👑 **{bot.get_user(self.lobby_data['owner']).display_name}** is now the lobby owner!"
                 )
+            
+            # Notify in the lobby channel
+            await interaction.channel.send(
+                f"👋 **{interaction.user.display_name}** left the lobby. "
+                f"({len(self.lobby_data['players'])}/3 players remaining)"
+            )
+            
+            # If lobby is empty, start timer for deletion
+            if len(self.lobby_data['players']) == 0:
+                if interaction.channel.id not in empty_lobby_timers:
+                    empty_lobby_timers[interaction.channel.id] = asyncio.create_task(
+                        self._delete_empty_lobby(interaction.channel)
+                    )
+                    
+        except Exception as e:
+            logger.error(f"Error in leave_lobby: {str(e)}")
+            # Try to send error message if interaction hasn't been responded to
+            try:
+                await interaction.followup.send(
+                    "❌ An error occurred while leaving the lobby. Please try again.",
+                    ephemeral=True
+                )
+            except:
+                pass
 
     async def _delete_empty_lobby(self, channel):
         await asyncio.sleep(300)  # 5 minutes
