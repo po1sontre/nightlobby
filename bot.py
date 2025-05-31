@@ -534,7 +534,7 @@ async def on_message(message):
             active_lobbies[lobby_channel.id] = lobby_data
             user_sessions[message.author.id] = lobby_channel.id
             # Send the hash message in the lobby channel
-            hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`")
+            hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`\nQuick Join: `/join_lobby {lobby_hash}`")
             lobby_data['hash_message_id'] = hash_msg.id
             # Send the Join Game button in the original channel (not persistent)
             join_embed = discord.Embed(
@@ -557,7 +557,12 @@ async def on_message(message):
                 value="🟢 **OPEN** - Need 2 more players",
                 inline=True
             )
-            join_embed.set_footer(text="Click 'Join Game' to join this lobby!")
+            join_embed.add_field(
+                name="Quick Join",
+                value=f"`/join_lobby {lobby_hash}`",
+                inline=False
+            )
+            join_embed.set_footer(text="Click 'Join Game' to join this lobby or use the Quick Join command!")
             view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
             msg = await (message.channel.send if hasattr(message, 'channel') else ctx.send)(embed=join_embed, view=view)
             bot.add_view(view, message_id=msg.id)
@@ -636,7 +641,7 @@ async def create_game(ctx):
         active_lobbies[lobby_channel.id] = lobby_data
         user_sessions[user_id] = lobby_channel.id
         # Send the hash message in the lobby channel
-        hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`")
+        hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`\nQuick Join: `/join_lobby {lobby_hash}`")
         lobby_data['hash_message_id'] = hash_msg.id
         # Send the Join Game button in the original channel (not persistent)
         join_embed = discord.Embed(
@@ -659,7 +664,12 @@ async def create_game(ctx):
             value="🟢 **OPEN** - Need 2 more players",
             inline=True
         )
-        join_embed.set_footer(text="Click 'Join Game' to join this lobby!")
+        join_embed.add_field(
+            name="Quick Join",
+            value=f"`/join_lobby {lobby_hash}`",
+            inline=False
+        )
+        join_embed.set_footer(text="Click 'Join Game' to join this lobby or use the Quick Join command!")
         view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
         msg = await ctx.send(embed=join_embed, view=view)
         bot.add_view(view, message_id=msg.id)
@@ -934,6 +944,30 @@ async def lobby_help(ctx):
     embed.set_footer(text="Need more help? Contact a moderator!")
     
     await ctx.send(embed=embed)
+
+@bot.command(name='join_lobby')
+async def join_lobby(ctx, lobby_hash: str):
+    """Join a lobby by its hash."""
+    # Find the lobby by hash
+    for lobby in active_lobbies.values():
+        if lobby['hash'] == lobby_hash:
+            channel = bot.get_channel(lobby['channel'])
+            if not channel:
+                await ctx.send("❌ That lobby no longer exists.")
+                return
+            if ctx.author.id in lobby['players']:
+                await ctx.send("❌ You are already in this lobby.")
+                return
+            if len(lobby['players']) >= 3:
+                await ctx.send("❌ This lobby is full! (3/3 players)")
+                return
+            lobby['players'].append(ctx.author.id)
+            user_sessions[ctx.author.id] = channel.id
+            await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
+            await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! ({len(lobby['players'])}/3 players)")
+            await ctx.send(f"🎮 You've joined the lobby! Click here to go to the channel: {channel.mention}")
+            return
+    await ctx.send("❌ No lobby found with that hash.")
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
