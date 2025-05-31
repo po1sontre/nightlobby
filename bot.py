@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 import re
 import json
+import uuid
 
 # Load environment variables
 load_dotenv()
@@ -33,11 +34,11 @@ empty_lobby_timers = {}  # Track empty lobby timers
 STEAM_CODE_PATTERN = r'(?:^|\s|:)(\d{9,10})(?:\s|$|\.|,|!|\?)'
 
 class LobbyView(discord.ui.View):
-    def __init__(self, owner_id, lobby_channel):
-        super().__init__(timeout=1800)  # 30 minute timeout
+    def __init__(self, owner_id, lobby_channel, lobby_hash):
+        super().__init__(timeout=None)  # Persistent view
         self.owner_id = owner_id
         self.lobby_channel = lobby_channel
-        self.players = [owner_id]
+        self.lobby_hash = lobby_hash
         self.max_players = 3
         
     @discord.ui.button(label='Join Game', style=discord.ButtonStyle.green, emoji='🎮')
@@ -452,21 +453,31 @@ class LobbyListButton(discord.ui.View):
             return
             
         # Create a temporary view to handle the join
-        view = LobbyView(lobby_data['owner'], self.lobby_channel)
+        view = LobbyView(lobby_data['owner'], self.lobby_channel, lobby_data['hash'])
         await view.join_game(interaction, button)
 
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
-    # Rebuild active_lobbies and user_sessions from existing lobby channels
     active_lobbies.clear()
     user_sessions.clear()
     for guild in bot.guilds:
         for channel in guild.text_channels:
             if channel.name.startswith('lobby-'):
-                # Find all members with read/send permissions (excluding the bot)
                 players = []
                 owner_id = None
+                hash_message_id = None
+                lobby_hash = None
+                async for message in channel.history(limit=20):
+                    if message.author == bot.user and message.embeds:
+                        embed = message.embeds[0]
+                        if embed.title and 'NightReign Lobby' in embed.title and 'Lobby Hash:' in embed.description:
+                            # Extract hash
+                            hash_line = [line for line in embed.description.split('\n') if 'Lobby Hash:' in line]
+                            if hash_line:
+                                lobby_hash = hash_line[0].split('`')[1]
+                                hash_message_id = message.id
+                            break
                 for member in channel.members:
                     perms = channel.permissions_for(member)
                     if perms.read_messages and perms.send_messages and not member.bot:
@@ -475,26 +486,20 @@ async def on_ready():
                             owner_id = member.id
                 if owner_id is None and players:
                     owner_id = players[0]
-                if owner_id:
+                if owner_id and lobby_hash and hash_message_id:
                     lobby_data = {
                         'owner': owner_id,
                         'players': players,
                         'channel': channel.id,
-                        'created_at': datetime.utcnow()  # Can't recover original, so use now
+                        'created_at': datetime.utcnow(),
+                        'hash': lobby_hash,
+                        'hash_message_id': hash_message_id
                     }
                     active_lobbies[channel.id] = lobby_data
                     for pid in players:
                         user_sessions[pid] = channel.id
-                    # Re-register the LobbyView for the latest bot message with the lobby embed
-                    try:
-                        async for message in channel.history(limit=20):
-                            if message.author == bot.user and message.embeds:
-                                embed = message.embeds[0]
-                                if embed.title and 'NightReign Lobby' in embed.title:
-                                    bot.add_view(LobbyView(owner_id, channel), message_id=message.id)
-                                    break
-                    except Exception as e:
-                        logger.error(f'Error re-registering LobbyView for channel {channel.id}: {e}')
+                    # Re-register the persistent view
+                    bot.add_view(LobbyView(owner_id, channel, lobby_hash), message_id=hash_message_id)
     cleanup_inactive_lobbies.start()
 
 @bot.event
@@ -547,38 +552,29 @@ async def on_message(message):
             )
             logger.info(f"Created new lobby channel {channel_name} for user {message.author}")
             # Store lobby data
+            lobby_hash = str(uuid.uuid4())
             lobby_data = {
                 'owner': message.author.id,
                 'players': [message.author.id],
                 'channel': lobby_channel.id,
-                'created_at': datetime.now()
+                'created_at': datetime.now(),
+                'hash': lobby_hash,
+                'hash_message_id': None
             }
             active_lobbies[lobby_channel.id] = lobby_data
             user_sessions[message.author.id] = lobby_channel.id
-            # Create and send lobby embed
-            embed = discord.Embed(
+            # Send the hash message with persistent view
+            join_embed = discord.Embed(
                 title="🕹️ NightReign Lobby",
+                description=f"Lobby Hash: `{lobby_hash}`\nClick the button below to join this lobby!",
                 color=0x00ff00,
                 timestamp=datetime.now()
             )
-            embed.add_field(
-                name="Players (1/3)",
-                value=f"👑 {message.author.display_name}",
-                inline=False
-            )
-            embed.add_field(
-                name="Lobby Channel",
-                value=f"{lobby_channel.mention}",
-                inline=True
-            )
-            embed.add_field(
-                name="Status",
-                value="🟢 **OPEN** - Need 2 more players",
-                inline=True
-            )
-            embed.set_footer(text="Click 'Join Game' to join this lobby!")
-            view = LobbyView(message.author.id, lobby_channel)
-            await message.channel.send(embed=embed, view=view)
+            view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
+            hash_msg = await lobby_channel.send(embed=join_embed, view=view)
+            lobby_data['hash_message_id'] = hash_msg.id
+            # Register the persistent view
+            bot.add_view(view, message_id=hash_msg.id)
             # Send welcome message in lobby channel
             lobby_view = LobbyChannelView(lobby_data)
             welcome_embed = discord.Embed(
@@ -642,14 +638,29 @@ async def create_game(ctx):
             reason=f"NightReign lobby created by {ctx.author}"
         )
         # Store lobby data
+        lobby_hash = str(uuid.uuid4())
         lobby_data = {
             'owner': user_id,
             'players': [user_id],
             'channel': lobby_channel.id,
-            'created_at': datetime.now()
+            'created_at': datetime.now(),
+            'hash': lobby_hash,
+            'hash_message_id': None
         }
         active_lobbies[lobby_channel.id] = lobby_data
         user_sessions[user_id] = lobby_channel.id
+        # Send the hash message with persistent view
+        join_embed = discord.Embed(
+            title="🕹️ NightReign Lobby",
+            description=f"Lobby Hash: `{lobby_hash}`\nClick the button below to join this lobby!",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
+        hash_msg = await lobby_channel.send(embed=join_embed, view=view)
+        lobby_data['hash_message_id'] = hash_msg.id
+        # Register the persistent view
+        bot.add_view(view, message_id=hash_msg.id)
         # Create and send lobby embed in the original channel
         embed = discord.Embed(
             title="🕹️ NightReign Lobby",
@@ -672,7 +683,7 @@ async def create_game(ctx):
             inline=True
         )
         embed.set_footer(text="Click 'Join Game' to join this lobby!")
-        view = LobbyView(user_id, lobby_channel)
+        view = LobbyView(user_id, lobby_channel, lobby_hash)
         await ctx.send(embed=embed, view=view)
         # Send welcome message in lobby channel
         lobby_view = LobbyChannelView(lobby_data)
