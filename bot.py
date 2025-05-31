@@ -160,13 +160,22 @@ class LobbyChannelView(discord.ui.View):
     def __init__(self, lobby_data):
         super().__init__(timeout=None)
         self.lobby_data = lobby_data
-        
+    
+    def get_live_players(self, channel_id):
+        # Always get the latest player list from active_lobbies
+        lobby = active_lobbies.get(channel_id)
+        if lobby:
+            return lobby['players']
+        return []
+    
     @discord.ui.button(label='Leave Lobby', style=discord.ButtonStyle.red, emoji='🚪')
     async def leave_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
+        channel_id = interaction.channel.id
+        players = self.get_live_players(channel_id)
         
         # Check if user is in the lobby
-        if user_id not in self.lobby_data['players']:
+        if user_id not in players:
             await interaction.response.send_message(
                 "❌ You're not in this lobby!",
                 ephemeral=True
@@ -178,7 +187,7 @@ class LobbyChannelView(discord.ui.View):
             await interaction.response.defer()
             
             # Remove player from lobby
-            self.lobby_data['players'].remove(user_id)
+            players.remove(user_id)
             if user_id in user_sessions:
                 del user_sessions[user_id]
                 
@@ -199,7 +208,7 @@ class LobbyChannelView(discord.ui.View):
                         # Update the embed
                         embed = message.embeds[0]
                         player_list = []
-                        for i, player_id in enumerate(self.lobby_data['players']):
+                        for i, player_id in enumerate(players):
                             user = bot.get_user(player_id)
                             if user:
                                 crown = "👑" if i == 0 else "🎮"
@@ -210,7 +219,7 @@ class LobbyChannelView(discord.ui.View):
                             if "Players" in field.name:
                                 embed.set_field_at(
                                     i,
-                                    name=f"Players ({len(self.lobby_data['players'])}/3)",
+                                    name=f"Players ({len(players)}/3)",
                                     value="\n".join(player_list) if player_list else "None",
                                     inline=False
                                 )
@@ -219,10 +228,10 @@ class LobbyChannelView(discord.ui.View):
                         # Update the status field
                         for i, field in enumerate(embed.fields):
                             if "Status" in field.name:
-                                if len(self.lobby_data['players']) >= 3:
+                                if len(players) >= 3:
                                     status = "🔴 **LOBBY FULL** - Ready to play!"
                                 else:
-                                    status = f"🟢 **OPEN** - Need {3 - len(self.lobby_data['players'])} more player(s)"
+                                    status = f"🟢 **OPEN** - Need {3 - len(players)} more player(s)"
                                 embed.set_field_at(i, name="Status", value=status, inline=True)
                                 break
                         
@@ -233,8 +242,8 @@ class LobbyChannelView(discord.ui.View):
                 logger.error(f"Error updating lobby message: {str(e)}")
             
             # If this was the owner leaving, transfer ownership to the next player
-            if user_id == self.lobby_data['owner'] and self.lobby_data['players']:
-                self.lobby_data['owner'] = self.lobby_data['players'][0]
+            if user_id == self.lobby_data['owner'] and players:
+                self.lobby_data['owner'] = players[0]
                 await interaction.channel.send(
                     f"👑 **{bot.get_user(self.lobby_data['owner']).display_name}** is now the lobby owner!"
                 )
@@ -242,11 +251,11 @@ class LobbyChannelView(discord.ui.View):
             # Notify in the lobby channel
             await interaction.channel.send(
                 f"👋 **{interaction.user.display_name}** left the lobby. "
-                f"({len(self.lobby_data['players'])}/3 players remaining)"
+                f"({len(players)}/3 players remaining)"
             )
             
             # If lobby is empty, start timer for deletion
-            if len(self.lobby_data['players']) == 0:
+            if len(players) == 0:
                 if interaction.channel.id not in empty_lobby_timers:
                     empty_lobby_timers[interaction.channel.id] = asyncio.create_task(
                         self._delete_empty_lobby(interaction.channel)
@@ -280,20 +289,44 @@ class LobbyChannelView(discord.ui.View):
         # Create a modal for entering the username
         class InviteModal(discord.ui.Modal, title='Invite Player'):
             username = discord.ui.TextInput(
-                label='Username to invite',
-                placeholder='Enter the username to invite...',
+                label='User to invite',
+                placeholder='@mention, username, or nickname...',
                 required=True,
                 min_length=2,
                 max_length=32
             )
 
             async def on_submit(self, interaction: discord.Interaction):
-                username = str(self.username).strip()
-                # Find the user in the guild
-                member = discord.utils.get(interaction.guild.members, name=username)
+                input_str = str(self.username).strip()
+                member = None
+                # Try mention (e.g., <@1234567890>)
+                if input_str.startswith('<@') and input_str.endswith('>'):
+                    user_id = input_str.replace('<@', '').replace('!', '').replace('>', '')
+                    try:
+                        user_id = int(user_id)
+                        member = interaction.guild.get_member(user_id)
+                    except:
+                        pass
+                # Try by ID
+                if not member and input_str.isdigit():
+                    member = interaction.guild.get_member(int(input_str))
+                # Try by username or nickname (case-insensitive)
+                if not member:
+                    for m in interaction.guild.members:
+                        if (m.name.lower() == input_str.lower() or
+                            (m.nick and m.nick.lower() == input_str.lower())):
+                            member = m
+                            break
+                # Try partial match (username or nickname contains input)
+                if not member:
+                    for m in interaction.guild.members:
+                        if (input_str.lower() in m.name.lower() or
+                            (m.nick and input_str.lower() in m.nick.lower())):
+                            member = m
+                            break
                 if not member:
                     await interaction.response.send_message(
-                        f"❌ Could not find user '{username}' in this server.",
+                        f"❌ Could not find user '{input_str}' in this server.",
                         ephemeral=True
                     )
                     return
