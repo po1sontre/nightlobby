@@ -42,6 +42,7 @@ class LobbyView(discord.ui.View):
     @discord.ui.button(label='Join Game', style=discord.ButtonStyle.green, emoji='🎮')
     async def join_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
+        await interaction.response.defer(ephemeral=True)
         
         # Check if user is already in a session
         if user_id in user_sessions:
@@ -52,28 +53,28 @@ class LobbyView(discord.ui.View):
                 # Clean up stale session
                 del user_sessions[user_id]
             else:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"❌ You're already in an active lobby! Leave your current session first: {channel.mention}",
                     ephemeral=True
                 )
                 return
-            
+        
         # Check if user is already in this lobby
         if user_id in self.players:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ You're already in this lobby!",
                 ephemeral=True
             )
             return
-            
+        
         # Check if lobby is full
         if len(self.players) >= self.max_players:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ This lobby is full! (3/3 players)",
                 ephemeral=True
             )
             return
-            
+        
         # Add player to lobby
         self.players.append(user_id)
         user_sessions[user_id] = self.lobby_channel.id
@@ -103,7 +104,7 @@ class LobbyView(discord.ui.View):
         ))
         
         # Send message to user with channel link and button
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"🎮 You've joined the lobby! Click the button below to go to the channel: {self.lobby_channel.mention}",
             view=view,
             ephemeral=True
