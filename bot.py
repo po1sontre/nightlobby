@@ -571,14 +571,22 @@ async def on_message(message):
             lobby_view = LobbyChannelView(lobby_data)
             welcome_embed = discord.Embed(
                 title="🎉 Welcome to your NightReign Lobby!",
-                description=f"Your Steam friend code: {steam_codes[0]}\n\n"
-                           f"Drop your Steam friend codes here and plan your game.\n\n"
-                           f"📢 Check #nightreign-online to get everything working!",
+                description=f"Lobby Hash: `{lobby_hash}`\n\nUse the commands below to manage your lobby:",
                 color=0x00ff00
             )
             welcome_embed.add_field(
-                name="📋 Instructions",
-                value="• Share your Steam friend codes\n• Coordinate your game time\n• Use 'Leave Lobby' to exit\n• Owner can 'End Session' to close the lobby",
+                name="📋 Lobby Commands",
+                value=(
+                    f"• `/join_lobby {lobby_hash}` — Join this lobby\n"
+                    f"• `/leave_lobby` — Leave this lobby\n"
+                    f"• `/invite_lobby @user` — Invite a user to this lobby\n"
+                    f"• `/end_lobby` — End the lobby (owner/mod only)"
+                ),
+                inline=False
+            )
+            welcome_embed.add_field(
+                name="Instructions",
+                value="Share your Steam friend codes, coordinate your game time, and use the commands above to manage your session.",
                 inline=False
             )
             await lobby_channel.send(embed=welcome_embed, view=lobby_view)
