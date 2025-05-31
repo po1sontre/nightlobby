@@ -469,15 +469,10 @@ async def on_ready():
                 hash_message_id = None
                 lobby_hash = None
                 async for message in channel.history(limit=20):
-                    if message.author == bot.user and message.embeds:
-                        embed = message.embeds[0]
-                        if embed.title and 'NightReign Lobby' in embed.title and 'Lobby Hash:' in embed.description:
-                            # Extract hash
-                            hash_line = [line for line in embed.description.split('\n') if 'Lobby Hash:' in line]
-                            if hash_line:
-                                lobby_hash = hash_line[0].split('`')[1]
-                                hash_message_id = message.id
-                            break
+                    if message.author == bot.user and message.content and message.content.startswith('Lobby Hash:'):
+                        lobby_hash = message.content.split('`')[1]
+                        hash_message_id = message.id
+                        break
                 for member in channel.members:
                     perms = channel.permissions_for(member)
                     if perms.read_messages and perms.send_messages and not member.bot:
@@ -498,8 +493,6 @@ async def on_ready():
                     active_lobbies[channel.id] = lobby_data
                     for pid in players:
                         user_sessions[pid] = channel.id
-                    # Re-register the persistent view
-                    bot.add_view(LobbyView(owner_id, channel, lobby_hash), message_id=hash_message_id)
     cleanup_inactive_lobbies.start()
 
 @bot.event
@@ -563,7 +556,10 @@ async def on_message(message):
             }
             active_lobbies[lobby_channel.id] = lobby_data
             user_sessions[message.author.id] = lobby_channel.id
-            # Send the hash message with persistent view
+            # Send the hash message in the lobby channel
+            hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`")
+            lobby_data['hash_message_id'] = hash_msg.id
+            # Send the Join Game button in the original channel (not persistent)
             join_embed = discord.Embed(
                 title="🕹️ NightReign Lobby",
                 description=f"Lobby Hash: `{lobby_hash}`\nClick the button below to join this lobby!",
@@ -571,10 +567,7 @@ async def on_message(message):
                 timestamp=datetime.now()
             )
             view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
-            hash_msg = await lobby_channel.send(embed=join_embed, view=view)
-            lobby_data['hash_message_id'] = hash_msg.id
-            # Register the persistent view
-            bot.add_view(view, message_id=hash_msg.id)
+            await message.channel.send(embed=join_embed, view=view)
             # Send welcome message in lobby channel
             lobby_view = LobbyChannelView(lobby_data)
             welcome_embed = discord.Embed(
@@ -649,7 +642,10 @@ async def create_game(ctx):
         }
         active_lobbies[lobby_channel.id] = lobby_data
         user_sessions[user_id] = lobby_channel.id
-        # Send the hash message with persistent view
+        # Send the hash message in the lobby channel
+        hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`")
+        lobby_data['hash_message_id'] = hash_msg.id
+        # Send the Join Game button in the original channel (not persistent)
         join_embed = discord.Embed(
             title="🕹️ NightReign Lobby",
             description=f"Lobby Hash: `{lobby_hash}`\nClick the button below to join this lobby!",
@@ -657,34 +653,7 @@ async def create_game(ctx):
             timestamp=datetime.now()
         )
         view = LobbyView(lobby_data['owner'], lobby_channel, lobby_hash)
-        hash_msg = await lobby_channel.send(embed=join_embed, view=view)
-        lobby_data['hash_message_id'] = hash_msg.id
-        # Register the persistent view
-        bot.add_view(view, message_id=hash_msg.id)
-        # Create and send lobby embed in the original channel
-        embed = discord.Embed(
-            title="🕹️ NightReign Lobby",
-            color=0x00ff00,
-            timestamp=datetime.now()
-        )
-        embed.add_field(
-            name="Players (1/3)",
-            value=f"👑 {ctx.author.display_name}",
-            inline=False
-        )
-        embed.add_field(
-            name="Lobby Channel",
-            value=f"{lobby_channel.mention}",
-            inline=True
-        )
-        embed.add_field(
-            name="Status",
-            value="🟢 **OPEN** - Need 2 more players",
-            inline=True
-        )
-        embed.set_footer(text="Click 'Join Game' to join this lobby!")
-        view = LobbyView(user_id, lobby_channel, lobby_hash)
-        await ctx.send(embed=embed, view=view)
+        await ctx.send(embed=join_embed, view=view)
         # Send welcome message in lobby channel
         lobby_view = LobbyChannelView(lobby_data)
         welcome_embed = discord.Embed(
