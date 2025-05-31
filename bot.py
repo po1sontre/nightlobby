@@ -533,7 +533,16 @@ async def create_game(ctx):
     
     # Check if user already has an active session
     if user_id in user_sessions:
-        await ctx.send("❌ You already have an active lobby! Leave it first before creating a new one.", ephemeral=True)
+        channel_id = user_sessions[user_id]
+        existing_channel = bot.get_channel(channel_id)
+        if existing_channel:
+            await ctx.send(
+                f"❌ You're already in an active lobby! Leave your current session first: {existing_channel.mention}",
+                ephemeral=True
+            )
+        else:
+            # Clean up stale session
+            del user_sessions[user_id]
         return
         
     try:
@@ -577,7 +586,7 @@ async def create_game(ctx):
         
         embed.add_field(
             name="Lobby Channel",
-            value=f"#{lobby_channel.name}",
+            value=f"{lobby_channel.mention}",
             inline=True
         )
         
