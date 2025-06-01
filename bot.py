@@ -787,18 +787,20 @@ async def list_lobbies(ctx):
         owner = bot.get_user(lobby_data['owner'])
         owner_name = owner.display_name if owner else "Unknown"
         
-        # Get player list, excluding owner, mods, and bots
+        # Get actual member count by checking channel permissions
+        member_count = 0
         player_list = []
-        real_player_count = 0
-        for player_id in lobby_data['players']:
-            member = channel.guild.get_member(player_id)
-            if member and not member.bot and not member.guild_permissions.administrator and not member.guild_permissions.manage_channels:
+        for member in channel.members:
+            if (channel.permissions_for(member).read_messages and 
+                not member.bot and 
+                not member.guild_permissions.administrator and 
+                not member.guild_permissions.manage_channels):
+                member_count += 1
                 player_list.append(member.display_name)
-                real_player_count += 1
-                
+        
         # Create player count string
-        player_count = f"{real_player_count}/3"
-        status = "🔴 FULL" if real_player_count >= 3 else "🟢 OPEN"
+        player_count = f"{member_count}/3"
+        status = "🔴 FULL" if member_count >= 3 else "🟢 OPEN"
         
         # Get the lobby hash
         lobby_hash = lobby_data.get('hash', '')
