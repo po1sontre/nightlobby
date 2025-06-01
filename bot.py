@@ -1288,10 +1288,16 @@ async def allow_player(ctx):
     
     # Add player to lobby
     user_id = request['user_id']
-    user = ctx.guild.get_member(user_id)
+    
+    # Try to fetch the member using the guild
+    try:
+        user = await ctx.guild.fetch_member(user_id)
+    except:
+        # If fetch fails, try to get from cache
+        user = ctx.guild.get_member(user_id)
     
     if not user:
-        await ctx.send("❌ The requesting user is no longer in the server.", ephemeral=True)
+        await ctx.send("❌ Could not find the requesting user. They may have left the server.", ephemeral=True)
         return
     
     # Check if user is already in a session
@@ -1305,23 +1311,29 @@ async def allow_player(ctx):
     user_sessions[user_id] = ctx.channel.id
     
     # Add permissions
-    await ctx.channel.set_permissions(user, read_messages=True, send_messages=True)
-    await ctx.channel.send(f"🎉 **{user.display_name}** was accepted and joined the lobby! ({member_count + 1}/3 players)")
-    
-    # Notify the user
     try:
-        await user.send(f"✅ Your match request was accepted! Click here to join: {ctx.channel.mention}")
-    except:
-        pass
-    
-    # Clean up the request
-    if user_id in pending_requests:
-        del pending_requests[user_id]
-    if request_id in request_timeouts:
-        request_timeouts[request_id].cancel()
-        del request_timeouts[request_id]
-    
-    await ctx.send("✅ Player has been added to the lobby!", ephemeral=True)
+        await ctx.channel.set_permissions(user, read_messages=True, send_messages=True)
+        await ctx.channel.send(f"🎉 **{user.display_name}** was accepted and joined the lobby! ({member_count + 1}/3 players)")
+        
+        # Notify the user
+        try:
+            await user.send(f"✅ Your match request was accepted! Click here to join: {ctx.channel.mention}")
+        except:
+            pass
+        
+        # Clean up the request
+        if user_id in pending_requests:
+            del pending_requests[user_id]
+        if request_id in request_timeouts:
+            request_timeouts[request_id].cancel()
+            del request_timeouts[request_id]
+        
+        await ctx.send("✅ Player has been added to the lobby!", ephemeral=True)
+    except discord.Forbidden:
+        await ctx.send("❌ I don't have permission to add the player to this channel.", ephemeral=True)
+    except Exception as e:
+        await ctx.send(f"❌ Error adding player to the lobby: {str(e)}", ephemeral=True)
+        logger.error(f"Error in allow command: {str(e)}")
 
 @bot.command(name='deny')
 async def deny_player(ctx):
