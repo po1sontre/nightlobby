@@ -1245,15 +1245,28 @@ async def allow_player(ctx):
         await ctx.send("❌ This command can only be used in lobby channels.", ephemeral=True)
         return
     
-    # Find the most recent match request
+    # Find the most recent match request by checking message history
     request = None
-    for user_id, req in pending_requests.items():
-        if req['timestamp'] > datetime.now() - timedelta(minutes=5):  # Only consider recent requests
-            request = req
-            break
+    request_id = None
+    
+    # Look for the most recent match request message in the channel
+    async for message in ctx.channel.history(limit=20):
+        if (message.author == bot.user and 
+            message.embeds and 
+            message.embeds[0].title == "🎮 Match Request"):
+            # Extract request ID from footer
+            if message.embeds[0].footer and message.embeds[0].footer.text:
+                request_id = message.embeds[0].footer.text.split("Request ID: ")[-1]
+                # Find the request in pending_requests
+                for user_id, req in pending_requests.items():
+                    if req['request_id'] == request_id:
+                        request = req
+                        break
+                if request:
+                    break
     
     if not request:
-        await ctx.send("❌ No active match requests found.", ephemeral=True)
+        await ctx.send("❌ No active match requests found in this channel.", ephemeral=True)
         return
     
     # Check if lobby is full
@@ -1262,33 +1275,55 @@ async def allow_player(ctx):
         await ctx.send("❌ This lobby is no longer active.", ephemeral=True)
         return
     
-    if len(lobby['players']) >= 3:
+    # Count actual members in channel
+    member_count = 0
+    for member in ctx.channel.members:
+        if (ctx.channel.permissions_for(member).read_messages and 
+            not member.bot and 
+            not member.guild_permissions.administrator and 
+            not member.guild_permissions.manage_channels):
+            member_count += 1
+    
+    if member_count >= 3:
         await ctx.send("❌ This lobby is full! (3/3 players)", ephemeral=True)
         return
     
     # Add player to lobby
     user_id = request['user_id']
-    lobby['players'].append(user_id)
+    user = ctx.guild.get_member(user_id)
+    
+    if not user:
+        await ctx.send("❌ The requesting user is no longer in the server.", ephemeral=True)
+        return
+    
+    # Check if user is already in a session
+    if user_id in user_sessions:
+        await ctx.send(f"❌ {user.display_name} is already in another lobby.", ephemeral=True)
+        return
+    
+    # Add to lobby data
+    if user_id not in lobby['players']:
+        lobby['players'].append(user_id)
     user_sessions[user_id] = ctx.channel.id
     
     # Add permissions
-    user = ctx.guild.get_member(user_id)
-    if user:
-        await ctx.channel.set_permissions(user, read_messages=True, send_messages=True)
-        await ctx.channel.send(f"🎉 **{user.display_name}** was accepted and joined the lobby! ({len(lobby['players'])}/3 players)")
-        
-        # Notify the user
-        try:
-            await user.send(f"✅ Your match request was accepted! Click here to join: {ctx.channel.mention}")
-        except:
-            pass
+    await ctx.channel.set_permissions(user, read_messages=True, send_messages=True)
+    await ctx.channel.send(f"🎉 **{user.display_name}** was accepted and joined the lobby! ({member_count + 1}/3 players)")
+    
+    # Notify the user
+    try:
+        await user.send(f"✅ Your match request was accepted! Click here to join: {ctx.channel.mention}")
+    except:
+        pass
     
     # Clean up the request
     if user_id in pending_requests:
         del pending_requests[user_id]
-    if request['request_id'] in request_timeouts:
-        request_timeouts[request['request_id']].cancel()
-        del request_timeouts[request['request_id']]
+    if request_id in request_timeouts:
+        request_timeouts[request_id].cancel()
+        del request_timeouts[request_id]
+    
+    await ctx.send("✅ Player has been added to the lobby!", ephemeral=True)
 
 @bot.command(name='deny')
 async def deny_player(ctx):
