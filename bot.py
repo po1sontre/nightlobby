@@ -29,9 +29,26 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 active_lobbies = {}
 user_sessions = {}  # Track which users are in active sessions
 empty_lobby_timers = {}  # Track empty lobby timers
+pending_requests = {}  # Store pending match requests
+request_timeouts = {}  # Store request timeout tasks
 
 # Steam friend code pattern (9-10 digits, can be within text)
 STEAM_CODE_PATTERN = r'(?:^|\s|:)(\d{9,10})(?:\s|$|\.|,|!|\?)'
+
+class CopyButton(discord.ui.Button):
+    def __init__(self, label: str, command: str):
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.secondary,
+            emoji="📋"
+        )
+        self.command = command
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            f"✅ Copied to clipboard: `{self.command}`",
+            ephemeral=True
+        )
 
 class LobbyView(discord.ui.View):
     def __init__(self, owner_id, lobby_channel, lobby_hash):
@@ -477,6 +494,11 @@ async def on_ready():
     if not cleanup_inactive_lobbies.is_running():
         cleanup_inactive_lobbies.start()
         print("Started lobby cleanup task - running every 5 minutes")
+    
+    # Start the periodic announcement task
+    if not periodic_announcement.is_running():
+        periodic_announcement.start()
+        print("Started periodic announcement task - running every 4 hours")
 
 @bot.event
 async def on_message(message):
@@ -728,8 +750,21 @@ async def my_lobby(ctx):
         del user_sessions[user_id]
         await ctx.send("❌ Your lobby channel no longer exists.")
         return
-        
-    await ctx.send(f"🎮 Your active lobby: {lobby_channel.mention}")
+    
+    # Get the lobby hash from the channel history
+    lobby_hash = None
+    async for message in lobby_channel.history(limit=20):
+        if message.author == bot.user and message.content and message.content.startswith('Lobby Hash:'):
+            lobby_hash = message.content.split('`')[1]
+            break
+    
+    if lobby_hash:
+        await ctx.send(
+            f"🎮 Your active lobby: {lobby_channel.mention}\n"
+            f"To join this lobby, use: `/join_lobby {lobby_hash}`"
+        )
+    else:
+        await ctx.send(f"🎮 Your active lobby: {lobby_channel.mention}")
 
 @bot.command(name='lobbies')
 async def list_lobbies(ctx):
@@ -737,17 +772,21 @@ async def list_lobbies(ctx):
     if not active_lobbies:
         await ctx.send("🔍 No active lobbies found.")
         return
+    
     embed = discord.Embed(
         title="🕹️ Active NightReign Lobbies",
         color=0x00ff00,
         timestamp=datetime.now()
     )
+    
     for channel_id, lobby_data in active_lobbies.items():
         channel = bot.get_channel(channel_id)
         if not channel:
             continue
+            
         owner = bot.get_user(lobby_data['owner'])
         owner_name = owner.display_name if owner else "Unknown"
+        
         # Get player list, excluding owner, mods, and bots
         player_list = []
         real_player_count = 0
@@ -756,9 +795,14 @@ async def list_lobbies(ctx):
             if member and not member.bot and not member.guild_permissions.administrator and not member.guild_permissions.manage_channels:
                 player_list.append(member.display_name)
                 real_player_count += 1
+                
         # Create player count string
         player_count = f"{real_player_count}/3"
         status = "🔴 FULL" if real_player_count >= 3 else "🟢 OPEN"
+        
+        # Get the lobby hash
+        lobby_hash = lobby_data.get('hash', '')
+        
         embed.add_field(
             name=f"#{channel.name}",
             value=(
@@ -768,13 +812,24 @@ async def list_lobbies(ctx):
             ),
             inline=False
         )
-        # Add a fresh join button for this lobby
+        
+        # Create view with buttons
         view = discord.ui.View()
+        
+        # Add join channel button
         view.add_item(discord.ui.Button(
-            label="Join Lobby",
+            label="Join Channel",
             style=discord.ButtonStyle.green,
             url=f"https://discord.com/channels/{ctx.guild.id}/{channel.id}"
         ))
+        
+        # Add copy command button if lobby has a hash
+        if lobby_hash:
+            view.add_item(CopyButton(
+                label="Copy Join Command",
+                command=f"/join_lobby {lobby_hash}"
+            ))
+        
         await ctx.send(embed=embed, view=view)
         embed = discord.Embed()  # Reset for next lobby
 
@@ -823,6 +878,71 @@ async def cleanup_inactive_lobbies():
         for uid in list(user_sessions):
             if user_sessions[uid] == channel_id:
                 del user_sessions[uid]
+
+@bot.event
+async def on_member_join(member):
+    """Send welcome message to new members"""
+    # Wait a bit to ensure the member is fully joined
+    await asyncio.sleep(1)
+    
+    try:
+        embed = discord.Embed(
+            title="🎮 Welcome to NightReign!",
+            description=(
+                "I'm your friendly NightReign Lobby Bot! Here's how to get started:\n\n"
+                "**Quick Start:**\n"
+                "1. Use `/create_game` to create a lobby\n"
+                "2. Share your Steam friend code in the lobby\n"
+                "3. Use `/find_match` to find other players\n"
+                "4. Use `/lobbies` to see all active games\n\n"
+                "**Need Help?**\n"
+                "• Use `/lobbyhelp` for all commands\n"
+                "• Use `/find_match` to find players\n"
+                "• Use `/my_lobby` to check your status"
+            ),
+            color=0x00ff00
+        )
+        
+        # Try to send DM first
+        try:
+            await member.send(embed=embed)
+        except:
+            # If DM fails, try to find a suitable channel
+            for channel in member.guild.text_channels:
+                if channel.permissions_for(member).send_messages:
+                    await channel.send(f"{member.mention}", embed=embed)
+                    break
+    except Exception as e:
+        logger.error(f"Error sending welcome message to {member}: {e}")
+
+@tasks.loop(hours=4)
+async def periodic_announcement():
+    """Send periodic announcements about the bot's features"""
+    for guild in bot.guilds:
+        try:
+            # Find a suitable channel for announcements
+            announcement_channel = None
+            for channel in guild.text_channels:
+                if channel.permissions_for(guild.me).send_messages:
+                    announcement_channel = channel
+                    break
+            
+            if announcement_channel:
+                embed = discord.Embed(
+                    title="🎮 NightReign Lobby Bot Reminder",
+                    description=(
+                        "**Quick Commands:**\n"
+                        "• `/create_game` - Create a new lobby\n"
+                        "• `/find_match` - Find players to join\n"
+                        "• `/lobbies` - View all active games\n"
+                        "• `/lobbyhelp` - See all commands\n\n"
+                        "**New Feature:** Use `/find_match` to automatically find players to join your game!"
+                    ),
+                    color=0x00ff00
+                )
+                await announcement_channel.send(embed=embed)
+        except Exception as e:
+            logger.error(f"Error sending periodic announcement to {guild}: {e}")
 
 @bot.command(name='leave_lobby')
 async def leave_lobby(ctx):
@@ -1034,6 +1154,184 @@ async def join_lobby(ctx, lobby_hash: str):
                 continue
                 
     await ctx.send("❌ No lobby found with that hash.")
+
+@bot.command(name='find_match')
+async def find_match(ctx):
+    """Broadcast a request to join any available lobby"""
+    user_id = ctx.author.id
+    
+    # Check if user is already in a session
+    if user_id in user_sessions:
+        channel_id = user_sessions[user_id]
+        existing_channel = bot.get_channel(channel_id)
+        if existing_channel:
+            await ctx.send(
+                f"❌ You're already in an active lobby! Leave your current session first: {existing_channel.mention}",
+                ephemeral=True
+            )
+        else:
+            # Clean up stale session
+            del user_sessions[user_id]
+        return
+    
+    # Check if user already has a pending request
+    if user_id in pending_requests:
+        await ctx.send("❌ You already have a pending match request. Please wait for responses or use `/cancel_request` to cancel.", ephemeral=True)
+        return
+    
+    # Create a unique request ID
+    request_id = str(uuid.uuid4())
+    
+    # Store the request
+    pending_requests[user_id] = {
+        'request_id': request_id,
+        'user_id': user_id,
+        'username': ctx.author.display_name,
+        'timestamp': datetime.now(),
+        'responses': set()
+    }
+    
+    # Create the request embed
+    embed = discord.Embed(
+        title="🎮 Match Request",
+        description=f"**{ctx.author.display_name}** is looking for a game!",
+        color=0x00ff00,
+        timestamp=datetime.now()
+    )
+    embed.add_field(
+        name="How to Respond",
+        value="Use `/allow` to accept this player\nUse `/deny` to decline",
+        inline=False
+    )
+    embed.set_footer(text=f"Request ID: {request_id}")
+    
+    # Send the request to all active lobbies
+    sent_count = 0
+    for channel_id, lobby_data in active_lobbies.items():
+        channel = bot.get_channel(channel_id)
+        if channel and len(lobby_data['players']) < 3:  # Only send to non-full lobbies
+            try:
+                await channel.send(embed=embed)
+                sent_count += 1
+            except Exception as e:
+                logger.error(f"Error sending match request to {channel.name}: {e}")
+    
+    if sent_count == 0:
+        await ctx.send("❌ No available lobbies found to send your request to.", ephemeral=True)
+        del pending_requests[user_id]
+        return
+    
+    # Create timeout task
+    async def request_timeout():
+        await asyncio.sleep(300)  # 5 minute timeout
+        if user_id in pending_requests and pending_requests[user_id]['request_id'] == request_id:
+            await ctx.send("⏰ Your match request has expired. No lobbies responded in time.", ephemeral=True)
+            del pending_requests[user_id]
+    
+    request_timeouts[request_id] = asyncio.create_task(request_timeout())
+    
+    await ctx.send(
+        f"✅ Your match request has been sent to {sent_count} available lobbies!\n"
+        "Waiting for responses... (5 minute timeout)",
+        ephemeral=True
+    )
+
+@bot.command(name='allow')
+async def allow_player(ctx):
+    """Allow a player to join your lobby"""
+    if not ctx.channel.name.startswith('lobby-'):
+        await ctx.send("❌ This command can only be used in lobby channels.", ephemeral=True)
+        return
+    
+    # Find the most recent match request
+    request = None
+    for user_id, req in pending_requests.items():
+        if req['timestamp'] > datetime.now() - timedelta(minutes=5):  # Only consider recent requests
+            request = req
+            break
+    
+    if not request:
+        await ctx.send("❌ No active match requests found.", ephemeral=True)
+        return
+    
+    # Check if lobby is full
+    lobby = active_lobbies.get(ctx.channel.id)
+    if not lobby:
+        await ctx.send("❌ This lobby is no longer active.", ephemeral=True)
+        return
+    
+    if len(lobby['players']) >= 3:
+        await ctx.send("❌ This lobby is full! (3/3 players)", ephemeral=True)
+        return
+    
+    # Add player to lobby
+    user_id = request['user_id']
+    lobby['players'].append(user_id)
+    user_sessions[user_id] = ctx.channel.id
+    
+    # Add permissions
+    user = ctx.guild.get_member(user_id)
+    if user:
+        await ctx.channel.set_permissions(user, read_messages=True, send_messages=True)
+        await ctx.channel.send(f"🎉 **{user.display_name}** was accepted and joined the lobby! ({len(lobby['players'])}/3 players)")
+        
+        # Notify the user
+        try:
+            await user.send(f"✅ Your match request was accepted! Click here to join: {ctx.channel.mention}")
+        except:
+            pass
+    
+    # Clean up the request
+    if user_id in pending_requests:
+        del pending_requests[user_id]
+    if request['request_id'] in request_timeouts:
+        request_timeouts[request['request_id']].cancel()
+        del request_timeouts[request['request_id']]
+
+@bot.command(name='deny')
+async def deny_player(ctx):
+    """Deny a player's request to join your lobby"""
+    if not ctx.channel.name.startswith('lobby-'):
+        await ctx.send("❌ This command can only be used in lobby channels.", ephemeral=True)
+        return
+    
+    # Find the most recent match request
+    request = None
+    for user_id, req in pending_requests.items():
+        if req['timestamp'] > datetime.now() - timedelta(minutes=5):  # Only consider recent requests
+            request = req
+            break
+    
+    if not request:
+        await ctx.send("❌ No active match requests found.", ephemeral=True)
+        return
+    
+    # Notify the user
+    user = ctx.guild.get_member(request['user_id'])
+    if user:
+        try:
+            await user.send(f"❌ Your match request was denied by {ctx.channel.name}")
+        except:
+            pass
+    
+    await ctx.send("✅ Match request denied.", ephemeral=True)
+
+@bot.command(name='cancel_request')
+async def cancel_request(ctx):
+    """Cancel your pending match request"""
+    user_id = ctx.author.id
+    
+    if user_id not in pending_requests:
+        await ctx.send("❌ You don't have any pending match requests.", ephemeral=True)
+        return
+    
+    request = pending_requests[user_id]
+    if request['request_id'] in request_timeouts:
+        request_timeouts[request['request_id']].cancel()
+        del request_timeouts[request['request_id']]
+    
+    del pending_requests[user_id]
+    await ctx.send("✅ Your match request has been cancelled.", ephemeral=True)
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
