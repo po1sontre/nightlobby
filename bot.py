@@ -884,14 +884,11 @@ async def list_lobbies(ctx):
         if not channel:
             continue
             
-        # Get actual member count by checking channel permissions
+        # Get member count by checking for the specific role
         member_count = 0
         player_list = []
         for member in channel.members:
-            if (channel.permissions_for(member).read_messages and 
-                not member.bot and 
-                not member.guild_permissions.administrator and 
-                not member.guild_permissions.manage_channels):
+            if any(role.id == 1242067709433217088 for role in member.roles):
                 member_count += 1
                 player_list.append(member.display_name)
         
