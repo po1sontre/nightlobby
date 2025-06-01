@@ -455,8 +455,37 @@ class LobbyListButton(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
+    
+    # Store existing lobby channels before clearing
+    existing_lobbies = []
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channel.name.startswith('lobby-'):
+                existing_lobbies.append(channel)
+    
+    # Clear active lobbies and sessions
     active_lobbies.clear()
     user_sessions.clear()
+    
+    # Send restart notification to existing lobbies
+    for channel in existing_lobbies:
+        try:
+            embed = discord.Embed(
+                title="🔄 Bot Restart Notice",
+                description=(
+                    "The bot has been restarted for development purposes.\n\n"
+                    "⚠️ **Important:** Some features may not work as expected.\n"
+                    "Please use `/leave_lobby` to leave this channel.\n"
+                    "The channel will be automatically deleted after 5 minutes of being empty."
+                ),
+                color=0xff9900
+            )
+            embed.set_footer(text="Thank you for your understanding!")
+            await channel.send(embed=embed)
+        except Exception as e:
+            logger.error(f"Error sending restart message to {channel.name}: {e}")
+    
+    # Continue with normal lobby restoration
     for guild in bot.guilds:
         for channel in guild.text_channels:
             if channel.name.startswith('lobby-'):
@@ -773,11 +802,20 @@ async def list_lobbies(ctx):
         await ctx.send("🔍 No active lobbies found.")
         return
     
+    # Create a single embed for all lobbies
     embed = discord.Embed(
         title="🕹️ Active NightReign Lobbies",
+        description="Use the buttons below to join a lobby",
         color=0x00ff00,
         timestamp=datetime.now()
     )
+    
+    # Create a view for all join buttons
+    view = discord.ui.View()
+    
+    # Track total lobbies and available spots
+    total_lobbies = 0
+    available_spots = 0
     
     for channel_id, lobby_data in active_lobbies.items():
         channel = bot.get_channel(channel_id)
@@ -798,42 +836,81 @@ async def list_lobbies(ctx):
                 member_count += 1
                 player_list.append(member.display_name)
         
-        # Create player count string
-        player_count = f"{member_count}/3"
-        status = "🔴 FULL" if member_count >= 3 else "🟢 OPEN"
+        # Skip full lobbies
+        if member_count >= 3:
+            continue
+            
+        total_lobbies += 1
+        available_spots += (3 - member_count)
         
         # Get the lobby hash
         lobby_hash = lobby_data.get('hash', '')
         
+        # Add lobby info to embed
         embed.add_field(
             name=f"#{channel.name}",
             value=(
                 f"👑 Owner: {owner_name}\n"
-                f"👥 Players: {player_count} {status}\n"
+                f"👥 Players: {member_count}/3\n"
                 f"🎮 Players: {', '.join(player_list) if player_list else 'None'}"
             ),
-            inline=False
+            inline=True
         )
         
-        # Create view with buttons
-        view = discord.ui.View()
-        
-        # Add join channel button
-        view.add_item(discord.ui.Button(
-            label="Join Channel",
-            style=discord.ButtonStyle.green,
-            url=f"https://discord.com/channels/{ctx.guild.id}/{channel.id}"
-        ))
-        
-        # Add copy command button if lobby has a hash
+        # Add join button if lobby has a hash
         if lobby_hash:
-            view.add_item(CopyButton(
-                label="Copy Join Command",
-                command=f"/join_lobby {lobby_hash}"
+            view.add_item(discord.ui.Button(
+                label=f"Join {channel.name}",
+                style=discord.ButtonStyle.green,
+                custom_id=f"join_{channel_id}",
+                emoji="🎮"
             ))
+    
+    if total_lobbies == 0:
+        await ctx.send("🔍 No available lobbies found.")
+        return
+    
+    # Add summary field
+    embed.add_field(
+        name="📊 Summary",
+        value=f"Total Lobbies: {total_lobbies}\nAvailable Spots: {available_spots}",
+        inline=False
+    )
+    
+    # Add footer with instructions
+    embed.set_footer(text="Click a button above to join a lobby")
+    
+    # Send the embed with buttons
+    await ctx.send(embed=embed, view=view)
+
+# Add button callback for join buttons
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    if not interaction.data or 'custom_id' not in interaction.data:
+        return
         
-        await ctx.send(embed=embed, view=view)
-        embed = discord.Embed()  # Reset for next lobby
+    if interaction.data['custom_id'].startswith('join_'):
+        channel_id = int(interaction.data['custom_id'].split('_')[1])
+        channel = bot.get_channel(channel_id)
+        
+        if not channel:
+            await interaction.response.send_message("❌ This lobby no longer exists.", ephemeral=True)
+            return
+            
+        # Get the lobby hash
+        lobby_hash = None
+        async for message in channel.history(limit=20):
+            if message.author == bot.user and message.content and message.content.startswith('Lobby Hash:'):
+                lobby_hash = message.content.split('`')[1]
+                break
+        
+        if not lobby_hash:
+            await interaction.response.send_message("❌ Could not find lobby information.", ephemeral=True)
+            return
+            
+        # Create a temporary view to handle the join
+        view = LobbyView(active_lobbies[channel_id]['owner'], channel, lobby_hash)
+        await view.join_game(interaction, None)
 
 @tasks.loop(minutes=5)
 async def cleanup_inactive_lobbies():
