@@ -452,6 +452,81 @@ class LobbyListButton(discord.ui.View):
         view = LobbyView(lobby_data['owner'], self.lobby_channel, lobby_data['hash'])
         await view.join_game(interaction, button)
 
+class LobbyPaginator(discord.ui.View):
+    def __init__(self, lobbies_data, timeout=180):
+        super().__init__(timeout=timeout)
+        self.lobbies_data = lobbies_data
+        self.current_page = 0
+        self.lobbies_per_page = 5
+        self.total_pages = (len(lobbies_data) + self.lobbies_per_page - 1) // self.lobbies_per_page
+        
+        # Update button states
+        self.update_buttons()
+    
+    def update_buttons(self):
+        self.previous_page.disabled = self.current_page == 0
+        self.next_page.disabled = self.current_page >= self.total_pages - 1
+    
+    def get_page_embed(self):
+        start_idx = self.current_page * self.lobbies_per_page
+        end_idx = min(start_idx + self.lobbies_per_page, len(self.lobbies_data))
+        current_lobbies = self.lobbies_data[start_idx:end_idx]
+        
+        embed = discord.Embed(
+            title="🕹️ Active NightReign Lobbies",
+            description="Use the commands below to join a lobby",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+        
+        # Add lobbies for current page
+        for lobby_data in current_lobbies:
+            channel = bot.get_channel(lobby_data['channel_id'])
+            if not channel:
+                continue
+                
+            owner = bot.get_user(lobby_data['owner'])
+            owner_name = owner.display_name if owner else "Unknown"
+            
+            embed.add_field(
+                name=f"#{channel.name}",
+                value=(
+                    f"👑 Owner: {owner_name}\n"
+                    f"👥 Players: {lobby_data['member_count']}/3\n"
+                    f"🎮 Players: {', '.join(lobby_data['player_list']) if lobby_data['player_list'] else 'None'}\n"
+                    f"🔑 Join Command: `/join_lobby {lobby_data['hash']}`"
+                ),
+                inline=True
+            )
+        
+        # Add summary field
+        embed.add_field(
+            name="📊 Summary",
+            value=(
+                f"Total Lobbies: {len(self.lobbies_data)}\n"
+                f"Available Spots: {sum(3 - data['member_count'] for data in self.lobbies_data)}\n"
+                f"Page {self.current_page + 1}/{self.total_pages}"
+            ),
+            inline=False
+        )
+        
+        embed.set_footer(text="Copy and paste the join command to join a lobby")
+        return embed
+    
+    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.gray, custom_id="previous_page")
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.get_page_embed(), view=self)
+    
+    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.gray, custom_id="next_page")
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.get_page_embed(), view=self)
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
@@ -797,34 +872,18 @@ async def my_lobby(ctx):
 
 @bot.command(name='lobbies')
 async def list_lobbies(ctx):
-    """List all active lobbies with accurate player stats and join buttons"""
+    """List all active lobbies with accurate player stats and join commands"""
     if not active_lobbies:
         await ctx.send("🔍 No active lobbies found.")
         return
     
-    # Create a single embed for all lobbies
-    embed = discord.Embed(
-        title="🕹️ Active NightReign Lobbies",
-        description="Use the buttons below to join a lobby",
-        color=0x00ff00,
-        timestamp=datetime.now()
-    )
-    
-    # Create a view for all join buttons
-    view = discord.ui.View()
-    
-    # Track total lobbies and available spots
-    total_lobbies = 0
-    available_spots = 0
-    
+    # Collect all available lobby data
+    available_lobbies = []
     for channel_id, lobby_data in active_lobbies.items():
         channel = bot.get_channel(channel_id)
         if not channel:
             continue
             
-        owner = bot.get_user(lobby_data['owner'])
-        owner_name = owner.display_name if owner else "Unknown"
-        
         # Get actual member count by checking channel permissions
         member_count = 0
         player_list = []
@@ -840,48 +899,26 @@ async def list_lobbies(ctx):
         if member_count >= 3:
             continue
             
-        total_lobbies += 1
-        available_spots += (3 - member_count)
-        
         # Get the lobby hash
         lobby_hash = lobby_data.get('hash', '')
-        
-        # Add lobby info to embed
-        embed.add_field(
-            name=f"#{channel.name}",
-            value=(
-                f"👑 Owner: {owner_name}\n"
-                f"👥 Players: {member_count}/3\n"
-                f"🎮 Players: {', '.join(player_list) if player_list else 'None'}"
-            ),
-            inline=True
-        )
-        
-        # Add join button if lobby has a hash
-        if lobby_hash:
-            view.add_item(discord.ui.Button(
-                label=f"Join {channel.name}",
-                style=discord.ButtonStyle.green,
-                custom_id=f"join_{channel_id}",
-                emoji="🎮"
-            ))
+        if not lobby_hash:
+            continue
+            
+        available_lobbies.append({
+            'channel_id': channel_id,
+            'owner': lobby_data['owner'],
+            'member_count': member_count,
+            'player_list': player_list,
+            'hash': lobby_hash
+        })
     
-    if total_lobbies == 0:
+    if not available_lobbies:
         await ctx.send("🔍 No available lobbies found.")
         return
     
-    # Add summary field
-    embed.add_field(
-        name="📊 Summary",
-        value=f"Total Lobbies: {total_lobbies}\nAvailable Spots: {available_spots}",
-        inline=False
-    )
-    
-    # Add footer with instructions
-    embed.set_footer(text="Click a button above to join a lobby")
-    
-    # Send the embed with buttons
-    await ctx.send(embed=embed, view=view)
+    # Create and send the paginated view
+    view = LobbyPaginator(available_lobbies)
+    await ctx.send(embed=view.get_page_embed(), view=view)
 
 # Add button callback for join buttons
 @bot.event
