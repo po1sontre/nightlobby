@@ -922,12 +922,8 @@ async def periodic_announcement():
     """Send periodic announcements about the bot's features"""
     for guild in bot.guilds:
         try:
-            # Find a suitable channel for announcements
-            announcement_channel = None
-            for channel in guild.text_channels:
-                if channel.permissions_for(guild.me).send_messages:
-                    announcement_channel = channel
-                    break
+            # Get the specific announcement channel
+            announcement_channel = guild.get_channel(1242067710385590293)
             
             if announcement_channel:
                 embed = discord.Embed(
@@ -943,6 +939,8 @@ async def periodic_announcement():
                     color=0x00ff00
                 )
                 await announcement_channel.send(embed=embed)
+            else:
+                logger.error(f"Could not find announcement channel in {guild}")
         except Exception as e:
             logger.error(f"Error sending periodic announcement to {guild}: {e}")
 
