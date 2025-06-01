@@ -60,43 +60,11 @@ class LobbyView(discord.ui.View):
         
     @discord.ui.button(label='Join Game', style=discord.ButtonStyle.green, emoji='🎮', custom_id='join_game_button')
     async def join_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = interaction.user.id
-        lobby = active_lobbies.get(self.lobby_channel.id)
-        if not lobby:
-            await interaction.response.send_message("❌ This lobby no longer exists.", ephemeral=True)
-            return
-        players = lobby['players']
-        await interaction.response.defer(ephemeral=True)
-        if user_id in players:
-            await interaction.followup.send(
-                "❌ You're already in this lobby!",
-                ephemeral=True
-            )
-            return
-        if len(players) >= self.max_players:
-            await interaction.followup.send(
-                "❌ This lobby is full! (3/3 players)",
-                ephemeral=True
-            )
-            return
-        players.append(user_id)
-        lobby['players'] = players
-        user_sessions[user_id] = self.lobby_channel.id
-        await self.lobby_channel.set_permissions(
-            interaction.user,
-            read_messages=True,
-            send_messages=True
-        )
-        await self._update_lobby_message(interaction)
-        await self.lobby_channel.send(
-            f"🎉 **{interaction.user.display_name}** joined the lobby! "
-            f"({len(players)}/{self.max_players} players)"
-        )
-        await interaction.followup.send(
-            f"🎮 You've joined the lobby! Click here to go to the channel: {self.lobby_channel.mention}",
+        await interaction.response.send_message(
+            "❌ This command is not available in this view.",
             ephemeral=True
         )
-        
+
     async def _update_lobby_message(self, interaction):
         embed = discord.Embed(
             title="🕹️ NightReign Lobby",
@@ -166,274 +134,24 @@ class LobbyChannelView(discord.ui.View):
         
     @discord.ui.button(label='Leave Lobby', style=discord.ButtonStyle.red, emoji='🚪')
     async def leave_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = interaction.user.id
-        channel_id = interaction.channel.id
-        players = self.get_live_players(channel_id)
-        
-        # Always defer the interaction immediately
-        await interaction.response.defer(ephemeral=True)
-        
-        # Remove player from all relevant places
-        was_in_lobby = user_id in players
-        if was_in_lobby:
-            players.remove(user_id)
-        if user_id in user_sessions:
-            del user_sessions[user_id]
-            
-        # Update active_lobbies
-        if channel_id in active_lobbies:
-            active_lobbies[channel_id]['players'] = players
-            if len(players) == 0:
-                del active_lobbies[channel_id]
-        
-        # Always remove channel permissions
-        try:
-            overwrite = discord.PermissionOverwrite()
-            overwrite.read_messages = False
-            await interaction.channel.set_permissions(
-                interaction.user,
-                overwrite=overwrite
-            )
-        except discord.Forbidden:
-            logger.error(f"Could not remove permissions for user {interaction.user}")
-        except Exception:
-            pass
-        
-        # Update the lobby message in the original channel
-        try:
-            async for message in interaction.channel.history(limit=10):
-                if message.author == bot.user and "NightReign Lobby" in message.embeds[0].title:
-                    embed = message.embeds[0]
-                    player_list = []
-                    for i, player_id in enumerate(players):
-                        user = bot.get_user(player_id)
-                        if user:
-                            crown = "👑" if i == 0 else "🎮"
-                            player_list.append(f"{crown} {user.display_name}")
-                    for i, field in enumerate(embed.fields):
-                        if "Players" in field.name:
-                            embed.set_field_at(
-                                i,
-                                name=f"Players ({len(players)}/3)",
-                                value="\n".join(player_list) if player_list else "None",
-                                inline=False
-                            )
-                            break
-                    for i, field in enumerate(embed.fields):
-                        if "Status" in field.name:
-                            if len(players) >= 3:
-                                status = "🔴 **LOBBY FULL** - Ready to play!"
-                            else:
-                                status = f"🟢 **OPEN** - Need {3 - len(players)} more player(s)"
-                            embed.set_field_at(i, name="Status", value=status, inline=True)
-                            break
-                    await message.edit(embed=embed)
-                    break
-        except Exception as e:
-            logger.error(f"Error updating lobby message: {str(e)}")
-        
-        # If this was the owner leaving, transfer ownership to the next player
-        if was_in_lobby and user_id == self.lobby_data['owner'] and players:
-            self.lobby_data['owner'] = players[0]
-            if channel_id in active_lobbies:
-                active_lobbies[channel_id]['owner'] = players[0]
-            await interaction.channel.send(
-                f"👑 **{bot.get_user(self.lobby_data['owner']).display_name}** is now the lobby owner!"
-            )
-        
-        # Notify in the lobby channel
-        if was_in_lobby:
-            await interaction.channel.send(
-            f"👋 **{interaction.user.display_name}** left the lobby. "
-                f"({len(players)}/3 players remaining)"
-            )
-        else:
-            await interaction.channel.send(
-                f"👋 **{interaction.user.display_name}** left the channel.",
-            )
-        
-        # If lobby is empty, start timer for deletion
-        if len(players) == 0:
-            if interaction.channel.id not in empty_lobby_timers:
-                empty_lobby_timers[interaction.channel.id] = asyncio.create_task(
-                    self._delete_empty_lobby(interaction.channel)
-                )
-        
-        # Confirm to the user
-        await interaction.followup.send(
-            f"✅ You have left the lobby.",
+        await interaction.response.send_message(
+            "❌ This command is not available in this view.",
             ephemeral=True
         )
 
-    async def _delete_empty_lobby(self, channel):
-        await asyncio.sleep(300)  # 5 minutes
-        if channel.id in active_lobbies and len(active_lobbies[channel.id]['players']) == 0:
-            try:
-                await channel.delete(reason="Empty lobby timeout")
-            except:
-                pass
-            if channel.id in active_lobbies:
-                del active_lobbies[channel.id]
-            if channel.id in empty_lobby_timers:
-                del empty_lobby_timers[channel.id]
-                
     @discord.ui.button(label='Invite Player', style=discord.ButtonStyle.primary, emoji='📨')
     async def invite_player(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Create a modal for entering the username
-        class InviteModal(discord.ui.Modal, title='Invite Player'):
-            username = discord.ui.TextInput(
-                label='User to invite',
-                placeholder='@mention, username, or nickname...',
-                required=True,
-                min_length=2,
-                max_length=32
-            )
+        await interaction.response.send_message(
+            "❌ This command is not available in this view.",
+            ephemeral=True
+        )
 
-            async def on_submit(self, interaction: discord.Interaction):
-                input_str = str(self.username).strip()
-                member = None
-                # Try mention (e.g., <@1234567890>)
-                if input_str.startswith('<@') and input_str.endswith('>'):
-                    user_id = input_str.replace('<@', '').replace('!', '').replace('>', '')
-                    try:
-                        user_id = int(user_id)
-                        member = interaction.guild.get_member(user_id)
-                    except:
-                        pass
-                # Try by ID
-                if not member and input_str.isdigit():
-                    member = interaction.guild.get_member(int(input_str))
-                # Try by username or nickname (case-insensitive)
-                if not member:
-                    for m in interaction.guild.members:
-                        if (m.name.lower() == input_str.lower() or
-                            (m.nick and m.nick.lower() == input_str.lower())):
-                            member = m
-                            break
-                # Try partial match (username or nickname contains input)
-                if not member:
-                    for m in interaction.guild.members:
-                        if (input_str.lower() in m.name.lower() or
-                            (m.nick and input_str.lower() in m.nick.lower())):
-                            member = m
-                            break
-                if not member:
-                    await interaction.response.send_message(
-                        f"❌ Could not find user '{input_str}' in this server.",
-                        ephemeral=True
-                    )
-                    return
-
-                # Check if user is already in a session
-                if member.id in user_sessions:
-                    await interaction.response.send_message(
-                        f"❌ {member.mention} is already in an active lobby!",
-                        ephemeral=True
-                    )
-                    return
-
-                # Check if user is already in this lobby
-                if member.id in self.lobby_data['players']:
-                    await interaction.response.send_message(
-                        f"❌ {member.mention} is already in this lobby!",
-                        ephemeral=True
-                    )
-                    return
-
-                # Check if lobby is full
-                if len(self.lobby_data['players']) >= 3:
-                    await interaction.response.send_message(
-                        "❌ This lobby is full! (3/3 players)",
-                        ephemeral=True
-                    )
-                    return
-
-                # Add player to lobby
-                self.lobby_data['players'].append(member.id)
-                user_sessions[member.id] = interaction.channel.id
-
-                # Add user permissions to the lobby channel
-                await interaction.channel.set_permissions(
-                    member,
-                    read_messages=True,
-                    send_messages=True
-                )
-
-                # Notify in the lobby channel
-                await interaction.channel.send(
-                    f"🎉 **{member.display_name}** was invited and joined the lobby! "
-                    f"({len(self.lobby_data['players'])}/3 players)"
-                )
-
-                # Send DM to invited user
-                try:
-                    invite_embed = discord.Embed(
-                        title="🎮 NightReign Lobby Invitation",
-                        description=f"You've been invited to join a NightReign lobby by {interaction.user.display_name}!",
-                        color=0x00ff00
-                    )
-                    invite_embed.add_field(
-                        name="Lobby Channel",
-                        value=f"#{interaction.channel.name}",
-                        inline=True
-                    )
-                    invite_embed.add_field(
-                        name="Players",
-                        value=f"{len(self.lobby_data['players'])}/3",
-                        inline=True
-                    )
-                    
-                    view = discord.ui.View()
-                    view.add_item(discord.ui.Button(
-                        label="Join Lobby",
-                        style=discord.ButtonStyle.green,
-                        url=f"https://discord.com/channels/{interaction.guild.id}/{interaction.channel.id}"
-                    ))
-                    
-                    await member.send(embed=invite_embed, view=view)
-                except:
-                    await interaction.channel.send(
-                        f"⚠️ Could not send DM to {member.mention}. They may have DMs disabled."
-                    )
-
-                await interaction.response.send_message(
-                    f"✅ Successfully invited {member.mention} to the lobby!",
-                    ephemeral=True
-                )
-
-        # Show the invite modal
-        modal = InviteModal()
-        modal.lobby_data = self.lobby_data
-        await interaction.response.send_modal(modal)
-                
     @discord.ui.button(label='End Session', style=discord.ButtonStyle.gray, emoji='🏁')
     async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check if user is owner or has admin/mod permissions
-        if interaction.user.id != self.lobby_data['owner']:
-            # Check for admin/mod permissions
-            if not interaction.user.guild_permissions.administrator and not interaction.user.guild_permissions.manage_channels:
-                await interaction.response.send_message(
-                    "❌ Only the lobby owner or moderators can end the session!",
-                    ephemeral=True
-                )
-                return
-            
         await interaction.response.send_message(
-            "🏁 **Session ended by lobby owner.** Channel will be deleted in 10 seconds...\n"
-            "GG everyone! 🎮"
+            "❌ This command is not available in this view.",
+            ephemeral=True
         )
-        
-        # Clean up user sessions
-        for player_id in self.lobby_data['players']:
-            if player_id in user_sessions:
-                del user_sessions[player_id]
-                
-        # Clean up lobby data
-        if interaction.channel.id in active_lobbies:
-            del active_lobbies[interaction.channel.id]
-            
-        await asyncio.sleep(10)
-        await interaction.channel.delete(reason="Session ended by owner")
 
 class LobbyListButton(discord.ui.View):
     def __init__(self, lobby_channel):
@@ -442,15 +160,10 @@ class LobbyListButton(discord.ui.View):
         
     @discord.ui.button(label='Join Lobby', style=discord.ButtonStyle.green, emoji='🎮')
     async def join_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Get the lobby data
-        lobby_data = active_lobbies.get(self.lobby_channel.id)
-        if not lobby_data:
-            await interaction.response.send_message("❌ This lobby no longer exists.", ephemeral=True)
-            return
-            
-        # Create a temporary view to handle the join
-        view = LobbyView(lobby_data['owner'], self.lobby_channel, lobby_data['hash'])
-        await view.join_game(interaction, button)
+        await interaction.response.send_message(
+            "❌ This command is not available in this view.",
+            ephemeral=True
+        )
 
 class LobbyPaginator(discord.ui.View):
     def __init__(self, lobbies_data, timeout=180):
@@ -553,12 +266,15 @@ async def on_ready():
     for channel in existing_lobbies:
         try:
             embed = discord.Embed(
-                title="🔄 Bot Restart Notice",
+                title="🔄 Bot Restarted",
                 description=(
-                    "The bot has been restarted for maintenance.\n\n"
-                    "ℹ️ **Note:** Some features may temporarily work differently.\n"
-                    "You can continue using the lobby as normal.\n"
-                    "If you experience any issues, please ping <@1242067709433217088>"
+                    "The bot was restarted for maintenance or updates.\n"
+                    "Most features should work as normal, but some features may temporarily behave differently.\n"
+                    "If you notice any issues, please ping @po1sontre.\n\n"
+                    "**New Features:**\n"
+                    "• `/kick_lobby` - Anyone in a lobby can kick another member.\n"
+                    "• `/help` - See all available commands.\n"
+                    "• Slash commands and auto-suggestions are now supported!\n"
                 ),
                 color=0x00ff00
             )
@@ -955,7 +671,7 @@ async def on_interaction(interaction: discord.Interaction):
 
 @tasks.loop(minutes=5)
 async def cleanup_inactive_lobbies():
-    """Clean up inactive lobbies that haven't had messages in 3 hours"""
+    """Clean up inactive lobbies that haven't had messages in 2 hours"""
     now = datetime.utcnow()
     to_delete = []
     
@@ -972,10 +688,10 @@ async def cleanup_inactive_lobbies():
                     last_message = msg
                     break
                 
-                # If no messages found or last message is older than 3 hours
-                if not last_message or (now - last_message.created_at.replace(tzinfo=None)) > timedelta(hours=3):
+                # If no messages found or last message is older than 2 hours
+                if not last_message or (now - last_message.created_at.replace(tzinfo=None)) > timedelta(hours=2):
                     to_delete.append(channel.id)
-                    logger.info(f"Marking channel {channel.name} for deletion - inactive for 3+ hours")
+                    logger.info(f"Marking channel {channel.name} for deletion - inactive for 2+ hours")
                     
             except Exception as e:
                 logger.error(f"Error checking inactivity for channel {channel.name}: {e}")
@@ -985,7 +701,7 @@ async def cleanup_inactive_lobbies():
         channel = bot.get_channel(channel_id)
         if channel:
             try:
-                await channel.delete(reason="Inactive lobby (3h no messages)")
+                await channel.delete(reason="Inactive lobby (2h no messages)")
                 logger.info(f"Deleted inactive lobby channel: {channel.name}")
             except Exception as e:
                 logger.error(f"Error deleting inactive lobby channel {channel_id}: {e}")
@@ -1045,14 +761,17 @@ async def periodic_announcement():
             
             if announcement_channel:
                 embed = discord.Embed(
-                    title="🎮 NightReign Lobby Bot Reminder",
+                    title="🎮 NightReign Lobby Bot Update",
                     description=(
                         "**Quick Commands:**\n"
                         "• `/create_game` - Create a new lobby\n"
+                        "• `/join_lobby <hash>` - Join a lobby using its hash\n"
                         "• `/find_match` - Find players to join\n"
                         "• `/lobbies` - View all active games\n"
-                        "• `/lobbyhelp` - See all commands\n\n"
-                        "**New Feature:** Use `/find_match` to automatically find players to join your game!"
+                        "• `/help` or `/lobbyhelp` - See all commands\n\n"
+                        "**What's New:**\n"
+                        "• `/find_match` - Quickly find and request to join available lobbies!\n"
+                        "• All commands are now available as slash commands with auto-suggestions!\n"
                     ),
                     color=0x00ff00
                 )
@@ -1524,66 +1243,73 @@ async def cancel_request(ctx):
     del pending_requests[user_id]
     await ctx.send("✅ Your match request has been cancelled.", ephemeral=True)
 
-# Keep the individual slash command implementations
-@bot.tree.command(name="create_game", description="Create a new NightReign lobby")
-async def create_game_slash(interaction: discord.Interaction):
-    ctx = await bot.get_context(interaction)
-    await create_game(ctx)
+@bot.command(name='kick_lobby', description='Kick a player from your current lobby')
+async def kick_lobby(ctx, member: discord.Member):
+    """Kick a player from your current lobby (anyone in the lobby can kick anyone)"""
+    # Must be used in a lobby channel
+    if not ctx.channel.name.startswith('lobby-'):
+        await ctx.send("❌ This command can only be used in lobby channels.", ephemeral=True)
+        return
+    # Both must be in the channel
+    if not ctx.channel.permissions_for(ctx.author).read_messages or not ctx.channel.permissions_for(member).read_messages:
+        await ctx.send("❌ Both you and the target must be in this lobby.", ephemeral=True)
+        return
+    # Don't allow kicking yourself
+    if ctx.author.id == member.id:
+        await ctx.send("❌ You cannot kick yourself.", ephemeral=True)
+        return
+    # Remove from lobby data
+    lobby = active_lobbies.get(ctx.channel.id)
+    if lobby and member.id in lobby['players']:
+        lobby['players'].remove(member.id)
+    if member.id in user_sessions:
+        del user_sessions[member.id]
+    try:
+        await ctx.channel.set_permissions(member, overwrite=None)
+        await ctx.channel.send(f"👢 **{member.display_name}** was kicked from the lobby by **{ctx.author.display_name}**.")
+        try:
+            await member.send(f"❌ You were kicked from the lobby {ctx.channel.mention} by {ctx.author.display_name}.")
+        except:
+            pass
+        await ctx.send(f"✅ {member.display_name} has been kicked from the lobby.", ephemeral=True)
+    except Exception as e:
+        await ctx.send(f"❌ Error kicking {member.display_name}: {str(e)}", ephemeral=True)
 
-@bot.tree.command(name="my_lobby", description="Check your current lobby status")
-async def my_lobby_slash(interaction: discord.Interaction):
-    ctx = await bot.get_context(interaction)
-    await my_lobby(ctx)
+@bot.command(name='help', description='Show all available commands')
+async def help_command(ctx):
+    """Show all available commands and their descriptions"""
+    embed = discord.Embed(
+        title="🤖 NightReign Bot Help",
+        description="Here are all available commands:",
+        color=0x00ff00
+    )
+    embed.add_field(
+        name="Lobby Commands",
+        value=(
+            "`/create_game` - Create a new NightReign lobby\n"
+            "`/my_lobby` - Check your current lobby status\n"
+            "`/lobbies` - List all active lobbies\n"
+            "`/leave_lobby` - Leave your current lobby\n"
+            "`/end_lobby` - End the current lobby (owner/mod/role only)\n"
+            "`/invite_lobby @user` - Invite a player to your lobby\n"
+            "`/join_lobby <hash>` - Join a lobby using its hash\n"
+            "`/find_match` - Find players to join your game\n"
+            "`/allow` - Allow a player to join your lobby\n"
+            "`/deny` - Deny a player's request to join\n"
+            "`/cancel_request` - Cancel your pending match request\n"
+            "`/kick_lobby @user` - Kick a player from your current lobby\n"
+            "`/lobbyhelp` - Show all available lobby commands\n"
+            "`/help` - Show this help message"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="Use /<command> for slash commands or type them as text commands.")
+    await ctx.send(embed=embed)
 
-@bot.tree.command(name="lobbies", description="List all active lobbies")
-async def lobbies_slash(interaction: discord.Interaction):
+@bot.tree.command(name="help", description="Show all available commands")
+async def help_slash(interaction: discord.Interaction):
     ctx = await bot.get_context(interaction)
-    await list_lobbies(ctx)
-
-@bot.tree.command(name="leave_lobby", description="Leave your current lobby")
-async def leave_lobby_slash(interaction: discord.Interaction):
-    ctx = await bot.get_context(interaction)
-    await leave_lobby(ctx)
-
-@bot.tree.command(name="end_lobby", description="End the current lobby (owner/mod/role only)")
-async def end_lobby_slash(interaction: discord.Interaction):
-    ctx = await bot.get_context(interaction)
-    await end_lobby(ctx)
-
-@bot.tree.command(name="invite_lobby", description="Invite a player to your lobby")
-async def invite_lobby_slash(interaction: discord.Interaction, member: discord.Member):
-    ctx = await bot.get_context(interaction)
-    await invite_lobby(ctx, member)
-
-@bot.tree.command(name="lobbyhelp", description="Show all available lobby commands")
-async def lobby_help_slash(interaction: discord.Interaction):
-    ctx = await bot.get_context(interaction)
-    await lobby_help(ctx)
-
-@bot.tree.command(name="join_lobby", description="Join a lobby using its hash")
-async def join_lobby_slash(interaction: discord.Interaction, lobby_hash: str):
-    ctx = await bot.get_context(interaction)
-    await join_lobby(ctx, lobby_hash)
-
-@bot.tree.command(name="find_match", description="Find players to join your game")
-async def find_match_slash(interaction: discord.Interaction):
-    ctx = await bot.get_context(interaction)
-    await find_match(ctx)
-
-@bot.tree.command(name="allow", description="Allow a player to join your lobby")
-async def allow_slash(interaction: discord.Interaction):
-    ctx = await bot.get_context(interaction)
-    await allow_player(ctx)
-
-@bot.tree.command(name="deny", description="Deny a player's request to join")
-async def deny_slash(interaction: discord.Interaction):
-    ctx = await bot.get_context(interaction)
-    await deny_player(ctx)
-
-@bot.tree.command(name="cancel_request", description="Cancel your pending match request")
-async def cancel_request_slash(interaction: discord.Interaction):
-    ctx = await bot.get_context(interaction)
-    await cancel_request(ctx)
+    await help_command(ctx)
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
