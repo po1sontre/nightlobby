@@ -753,7 +753,7 @@ async def on_member_join(member):
 
 @tasks.loop(hours=4)
 async def periodic_announcement():
-    """Send periodic announcements about the bot's features"""
+    """Send periodic quick start reminders about the bot's features"""
     for guild in bot.guilds:
         try:
             # Get the specific announcement channel
@@ -761,17 +761,14 @@ async def periodic_announcement():
             
             if announcement_channel:
                 embed = discord.Embed(
-                    title="🎮 NightReign Lobby Bot Update",
+                    title="🎮 NightReign Lobby Bot Quick Start",
                     description=(
                         "**Quick Commands:**\n"
-                        "• `/create_game` - Create a new lobby\n"
-                        "• `/join_lobby <hash>` - Join a lobby using its hash\n"
-                        "• `/find_match` - Find players to join\n"
-                        "• `/lobbies` - View all active games\n"
-                        "• `/help` or `/lobbyhelp` - See all commands\n\n"
-                        "**What's New:**\n"
-                        "• `/find_match` - Quickly find and request to join available lobbies!\n"
-                        "• All commands are now available as slash commands with auto-suggestions!\n"
+                        "• `/create_game` — Create a new lobby\n"
+                        "• `/join_lobby <hash>` — Join a lobby using its hash\n"
+                        "• `/find_match` — Find players to join\n"
+                        "• `/lobbies` — View all active games\n"
+                        "• `/help` or `/lobbyhelp` — See all commands"
                     ),
                     color=0x00ff00
                 )
