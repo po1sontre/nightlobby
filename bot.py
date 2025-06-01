@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
-bot = commands.Bot(command_prefix='/', intents=intents)
+bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
 
 # In-memory storage for active lobbies
 active_lobbies = {}
@@ -531,6 +531,13 @@ class LobbyPaginator(discord.ui.View):
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
+    # Register slash commands
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s)")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+    
     # Store existing lobby channels before clearing
     existing_lobbies = []
     for guild in bot.guilds:
@@ -733,7 +740,7 @@ async def on_message(message):
     # Process commands after checking for Steam codes
     await bot.process_commands(message)
 
-@bot.command(name='create_game')
+@bot.command(name='create_game', description='Create a new NightReign lobby')
 async def create_game(ctx):
     """Create a new NightReign lobby"""
     user_id = ctx.author.id
@@ -837,7 +844,7 @@ async def create_game(ctx):
     except Exception as e:
         await ctx.send(f"❌ Error creating lobby: {str(e)}")
 
-@bot.command(name='my_lobby')
+@bot.command(name='my_lobby', description='Check your current lobby status')
 async def my_lobby(ctx):
     """Check your current lobby status"""
     user_id = ctx.author.id
@@ -870,7 +877,7 @@ async def my_lobby(ctx):
     else:
         await ctx.send(f"🎮 Your active lobby: {lobby_channel.mention}")
 
-@bot.command(name='lobbies')
+@bot.command(name='lobbies', description='List all active lobbies')
 async def list_lobbies(ctx):
     """List all active lobbies with accurate player stats and join commands"""
     if not active_lobbies:
@@ -1055,7 +1062,7 @@ async def periodic_announcement():
         except Exception as e:
             logger.error(f"Error sending periodic announcement to {guild}: {e}")
 
-@bot.command(name='leave_lobby')
+@bot.command(name='leave_lobby', description='Leave your current lobby')
 async def leave_lobby(ctx):
     """Leave the current lobby"""
     user_id = ctx.author.id
@@ -1120,8 +1127,9 @@ async def leave_lobby(ctx):
         logger.error(f"Error removing permissions for user {ctx.author}: {e}")
         await ctx.send("❌ Error removing you from the lobby.")
 
-@bot.command(name='end_lobby')
+@bot.command(name='end_lobby', description='End the current lobby (owner/mod/role only)')
 async def end_lobby(ctx):
+    """End the current lobby"""
     # First check if this is a lobby channel
     if not ctx.channel.name.startswith('lobby-'):
         await ctx.send("❌ This command can only be used in lobby channels.")
@@ -1162,8 +1170,9 @@ async def end_lobby(ctx):
     except Exception:
         pass
 
-@bot.command(name='invite_lobby')
+@bot.command(name='invite_lobby', description='Invite a player to your lobby')
 async def invite_lobby(ctx, member: discord.Member):
+    """Invite a player to your lobby"""
     user_id = ctx.author.id
     if user_id not in user_sessions:
         await ctx.send("❌ You are not in any lobby.")
@@ -1188,7 +1197,7 @@ async def invite_lobby(ctx, member: discord.Member):
     await channel.send(f"🎉 **{member.display_name}** was invited and joined the lobby! ({len(lobby['players']) if lobby else 'unknown'} players)")
     await ctx.send(f"✅ Successfully invited {member.mention} to the lobby!")
 
-@bot.command(name='lobbyhelp')
+@bot.command(name='lobbyhelp', description='Show all available lobby commands')
 async def lobby_help(ctx):
     """Show all available lobby commands and their usage"""
     embed = discord.Embed(
@@ -1237,9 +1246,9 @@ async def lobby_help(ctx):
     
     await ctx.send(embed=embed)
 
-@bot.command(name='join_lobby')
+@bot.command(name='join_lobby', description='Join a lobby using its hash')
 async def join_lobby(ctx, lobby_hash: str):
-    """Join a lobby by its hash. 3-person limit for new lobbies, unlimited for old/untracked."""
+    """Join a lobby by its hash"""
     input_hash = lobby_hash.strip().lower()
     # First, try active_lobbies as before
     for lobby in active_lobbies.values():
@@ -1290,7 +1299,7 @@ async def join_lobby(ctx, lobby_hash: str):
                 
     await ctx.send("❌ No lobby found with that hash.")
 
-@bot.command(name='find_match')
+@bot.command(name='find_match', description='Find players to join your game')
 async def find_match(ctx):
     """Broadcast a request to join any available lobby"""
     user_id = ctx.author.id
@@ -1371,7 +1380,7 @@ async def find_match(ctx):
         ephemeral=True
     )
 
-@bot.command(name='allow')
+@bot.command(name='allow', description='Allow a player to join your lobby')
 async def allow_player(ctx):
     """Allow a player to join your lobby"""
     if not ctx.channel.name.startswith('lobby-'):
@@ -1470,7 +1479,7 @@ async def allow_player(ctx):
         await ctx.send(f"❌ Error adding player to the lobby: {str(e)}", ephemeral=True)
         logger.error(f"Error in allow command: {str(e)}")
 
-@bot.command(name='deny')
+@bot.command(name='deny', description='Deny a player\'s request to join')
 async def deny_player(ctx):
     """Deny a player's request to join your lobby"""
     if not ctx.channel.name.startswith('lobby-'):
@@ -1498,7 +1507,7 @@ async def deny_player(ctx):
     
     await ctx.send("✅ Match request denied.", ephemeral=True)
 
-@bot.command(name='cancel_request')
+@bot.command(name='cancel_request', description='Cancel your pending match request')
 async def cancel_request(ctx):
     """Cancel your pending match request"""
     user_id = ctx.author.id
@@ -1514,6 +1523,15 @@ async def cancel_request(ctx):
     
     del pending_requests[user_id]
     await ctx.send("✅ Your match request has been cancelled.", ephemeral=True)
+
+# Convert all commands to slash commands
+for command in bot.commands:
+    @bot.tree.command(name=command.name, description=command.description or command.help or command.name)
+    async def slash_command(interaction: discord.Interaction, **kwargs):
+        # Convert interaction to context
+        ctx = await bot.get_context(interaction)
+        # Call the original command
+        await command(ctx, **kwargs)
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
