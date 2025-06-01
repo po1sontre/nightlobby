@@ -1524,14 +1524,66 @@ async def cancel_request(ctx):
     del pending_requests[user_id]
     await ctx.send("✅ Your match request has been cancelled.", ephemeral=True)
 
-# Convert all commands to slash commands
-for command in bot.commands:
-    @bot.tree.command(name=command.name, description=command.description or command.help or command.name)
-    async def slash_command(interaction: discord.Interaction, **kwargs):
-        # Convert interaction to context
-        ctx = await bot.get_context(interaction)
-        # Call the original command
-        await command(ctx, **kwargs)
+# Keep the individual slash command implementations
+@bot.tree.command(name="create_game", description="Create a new NightReign lobby")
+async def create_game_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await create_game(ctx)
+
+@bot.tree.command(name="my_lobby", description="Check your current lobby status")
+async def my_lobby_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await my_lobby(ctx)
+
+@bot.tree.command(name="lobbies", description="List all active lobbies")
+async def lobbies_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await list_lobbies(ctx)
+
+@bot.tree.command(name="leave_lobby", description="Leave your current lobby")
+async def leave_lobby_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await leave_lobby(ctx)
+
+@bot.tree.command(name="end_lobby", description="End the current lobby (owner/mod/role only)")
+async def end_lobby_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await end_lobby(ctx)
+
+@bot.tree.command(name="invite_lobby", description="Invite a player to your lobby")
+async def invite_lobby_slash(interaction: discord.Interaction, member: discord.Member):
+    ctx = await bot.get_context(interaction)
+    await invite_lobby(ctx, member)
+
+@bot.tree.command(name="lobbyhelp", description="Show all available lobby commands")
+async def lobby_help_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await lobby_help(ctx)
+
+@bot.tree.command(name="join_lobby", description="Join a lobby using its hash")
+async def join_lobby_slash(interaction: discord.Interaction, lobby_hash: str):
+    ctx = await bot.get_context(interaction)
+    await join_lobby(ctx, lobby_hash)
+
+@bot.tree.command(name="find_match", description="Find players to join your game")
+async def find_match_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await find_match(ctx)
+
+@bot.tree.command(name="allow", description="Allow a player to join your lobby")
+async def allow_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await allow_player(ctx)
+
+@bot.tree.command(name="deny", description="Deny a player's request to join")
+async def deny_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await deny_player(ctx)
+
+@bot.tree.command(name="cancel_request", description="Cancel your pending match request")
+async def cancel_request_slash(interaction: discord.Interaction):
+    ctx = await bot.get_context(interaction)
+    await cancel_request(ctx)
 
 # Run the bot
 bot.run(os.getenv('DISCORD_TOKEN'))
