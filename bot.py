@@ -548,14 +548,14 @@ async def on_ready():
             embed = discord.Embed(
                 title="🔄 Bot Restart Notice",
                 description=(
-                    "The bot has been restarted for development purposes.\n\n"
-                    "⚠️ **Important:** Some features may not work as expected.\n"
-                    "Please use `/leave_lobby` to leave this channel.\n"
-                    "The channel will be automatically deleted after 5 minutes of being empty."
+                    "The bot has been restarted for maintenance.\n\n"
+                    "ℹ️ **Note:** Some features may temporarily work differently.\n"
+                    "You can continue using the lobby as normal.\n"
+                    "If you experience any issues, please ping <@1242067709433217088>"
                 ),
-                color=0xff9900
+                color=0x00ff00
             )
-            embed.set_footer(text="Thank you for your understanding!")
+            embed.set_footer(text="Thank you for your patience!")
             await channel.send(embed=embed)
         except Exception as e:
             logger.error(f"Error sending restart message to {channel.name}: {e}")
@@ -1122,33 +1122,43 @@ async def leave_lobby(ctx):
 
 @bot.command(name='end_lobby')
 async def end_lobby(ctx):
-    user_id = ctx.author.id
-    if user_id not in user_sessions:
-        await ctx.send("❌ You are not in any lobby.")
+    # First check if this is a lobby channel
+    if not ctx.channel.name.startswith('lobby-'):
+        await ctx.send("❌ This command can only be used in lobby channels.")
         return
-    channel_id = user_sessions[user_id]
-    channel = bot.get_channel(channel_id)
-    if not channel:
-        del user_sessions[user_id]
-        await ctx.send("❌ Your lobby channel no longer exists.")
+        
+    # Check if user has access to the channel
+    if not ctx.channel.permissions_for(ctx.author).read_messages:
+        await ctx.send("❌ You don't have access to this lobby.")
         return
-    lobby = active_lobbies.get(channel_id)
-    # Only owner or admin/mod can end
-    is_owner = lobby and lobby['owner'] == user_id
+        
+    # Check if user has the required role
+    has_role = any(role.id == 1242067709433217088 for role in ctx.author.roles)
+    
+    # Check if user is owner, mod, or has the specific role
+    is_owner = False
     is_mod = ctx.author.guild_permissions.administrator or ctx.author.guild_permissions.manage_channels
-    if not (is_owner or is_mod):
-        await ctx.send("❌ Only the lobby owner or moderators can end the session!")
+    
+    # Try to get lobby data
+    lobby = active_lobbies.get(ctx.channel.id)
+    if lobby:
+        is_owner = lobby['owner'] == ctx.author.id
+    
+    if not (is_owner or is_mod or has_role):
+        await ctx.send("❌ Only the lobby owner, moderators, or users with the NightReign role can end the session!")
         return
+        
     # Remove all users from user_sessions
     if lobby:
         for pid in lobby['players']:
             if pid in user_sessions:
                 del user_sessions[pid]
-        del active_lobbies[channel_id]
+        del active_lobbies[ctx.channel.id]
+    
     await ctx.send("🏁 **Session ended.** Channel will be deleted in 10 seconds...")
     await asyncio.sleep(10)
     try:
-        await channel.delete(reason="Session ended by owner/mod")
+        await ctx.channel.delete(reason="Session ended by owner/mod/role")
     except Exception:
         pass
 
