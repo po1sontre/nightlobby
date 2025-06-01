@@ -960,6 +960,19 @@ async def leave_lobby(ctx):
         try:
             await ctx.channel.set_permissions(ctx.author, overwrite=None)
             await ctx.channel.send(f"👋 **{ctx.author.display_name}** left the lobby.")
+            
+            # Clean up user_sessions
+            if user_id in user_sessions:
+                del user_sessions[user_id]
+            
+            # Clean up active_lobbies
+            if ctx.channel.id in active_lobbies:
+                lobby = active_lobbies[ctx.channel.id]
+                if user_id in lobby['players']:
+                    lobby['players'].remove(user_id)
+                    if len(lobby['players']) == 0:
+                        del active_lobbies[ctx.channel.id]
+            
             await ctx.send("✅ You have left the lobby.", ephemeral=True)
         except Exception as e:
             logger.error(f"Error removing permissions for user {ctx.author}: {e}")
@@ -973,9 +986,12 @@ async def leave_lobby(ctx):
         
     channel_id = user_sessions[user_id]
     channel = bot.get_channel(channel_id)
+    
+    # Clean up user_sessions first
+    del user_sessions[user_id]
+    
     if not channel:
-        del user_sessions[user_id]
-        await ctx.send("❌ Your lobby channel no longer exists.")
+        await ctx.send("✅ You have been removed from the lobby.", ephemeral=True)
         return
         
     # Remove user from active_lobbies if tracked
@@ -984,13 +1000,11 @@ async def leave_lobby(ctx):
         lobby['players'].remove(user_id)
         if len(lobby['players']) == 0:
             del active_lobbies[channel_id]
-            
-    del user_sessions[user_id]
     
     try:
         await channel.set_permissions(ctx.author, overwrite=None)
         await channel.send(f"👋 **{ctx.author.display_name}** left the lobby.")
-        await ctx.send("✅ You have left the lobby.")
+        await ctx.send("✅ You have left the lobby.", ephemeral=True)
     except Exception as e:
         logger.error(f"Error removing permissions for user {ctx.author}: {e}")
         await ctx.send("❌ Error removing you from the lobby.")
