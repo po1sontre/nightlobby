@@ -366,13 +366,11 @@ async def on_message(message):
                 message.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
                 bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
             }
-            # Find the 'Bot Data' category to avoid it
-            bot_data_category = discord.utils.get(message.guild.categories, name='Bot Data')
             channel_name = f"lobby-{message.author.display_name.lower()}-{datetime.now().strftime('%H%M')}"
             lobby_channel = await message.guild.create_text_channel(
                 channel_name,
                 overwrites=overwrites,
-                category=None if not bot_data_category else None,  # Explicitly not in Bot Data
+                category=message.guild.get_channel(1379101422318125159),  # Create in specified category
                 reason=f"NightReign lobby created by {message.author}"
             )
             logger.info(f"Created new lobby channel {channel_name} for user {message.author}")
@@ -480,13 +478,11 @@ async def create_game(ctx):
             ctx.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
-        # Find the 'Bot Data' category to avoid it
-        bot_data_category = discord.utils.get(ctx.guild.categories, name='Bot Data')
         channel_name = f"lobby-{ctx.author.display_name.lower()}-{datetime.now().strftime('%H%M')}"
         lobby_channel = await ctx.guild.create_text_channel(
             channel_name,
             overwrites=overwrites,
-            category=None if not bot_data_category else None,  # Explicitly not in Bot Data
+            category=ctx.guild.get_channel(1379101422318125159),  # Create in specified category
             reason=f"NightReign lobby created by {ctx.author}"
         )
         # Store lobby data
