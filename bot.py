@@ -60,6 +60,14 @@ class LobbyView(discord.ui.View):
         
     @discord.ui.button(label='Join Game', style=discord.ButtonStyle.green, emoji='🎮', custom_id='join_game_button')
     async def join_game(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if lobby is full
+        if len(active_lobbies[self.lobby_channel.id]['players']) >= self.max_players:
+            await interaction.response.send_message(
+                f"❌ This lobby is full! ({len(active_lobbies[self.lobby_channel.id]['players'])}/3 players)\nPlayers in lobby: {', '.join([bot.get_user(pid).display_name for pid in active_lobbies[self.lobby_channel.id]['players']])}",
+                ephemeral=True
+            )
+            return
+            
         await interaction.response.send_message(
             "❌ This command is not available in this view.",
             ephemeral=True
@@ -320,7 +328,7 @@ async def on_ready():
     # Start the cleanup task
     if not cleanup_inactive_lobbies.is_running():
         cleanup_inactive_lobbies.start()
-        print("Started lobby cleanup task - running every 5 minutes")
+        print("Started lobby cleanup task - running every 1 minute")
     
     # Start the periodic announcement task
     if not periodic_announcement.is_running():
@@ -665,9 +673,9 @@ async def on_interaction(interaction: discord.Interaction):
         view = LobbyView(active_lobbies[channel_id]['owner'], channel, lobby_hash)
         await view.join_game(interaction, None)
 
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=1)
 async def cleanup_inactive_lobbies():
-    """Clean up inactive lobbies that haven't had messages in 2 hours"""
+    """Clean up inactive lobbies that haven't had messages in 2 hours, or 3 minutes if newly created"""
     now = datetime.utcnow()
     to_delete = []
     
@@ -678,14 +686,34 @@ async def cleanup_inactive_lobbies():
                 continue
                 
             try:
-                # Get the last message in the channel
-                last_message = None
-                async for msg in channel.history(limit=1, oldest_first=False):
-                    last_message = msg
-                    break
+                # Get the lobby data
+                lobby = active_lobbies.get(channel.id)
+                if not lobby:
+                    continue
+
+                # Check if this is a new lobby (less than 3 minutes old)
+                if (now - lobby['created_at'].replace(tzinfo=None)) <= timedelta(minutes=3):
+                    # For new lobbies, check if there are any non-bot messages
+                    has_user_messages = False
+                    async for msg in channel.history(limit=50):
+                        if not msg.author.bot:  # Only count non-bot messages
+                            has_user_messages = True
+                            break
+                    
+                    if not has_user_messages:
+                        to_delete.append(channel.id)
+                        logger.info(f"Marking new channel {channel.name} for deletion - no user messages in first 3 minutes")
+                    continue
+
+                # For older lobbies, check last non-bot message
+                last_user_message = None
+                async for msg in channel.history(limit=50):
+                    if not msg.author.bot:  # Only count non-bot messages
+                        last_user_message = msg
+                        break
                 
-                # If no messages found or last message is older than 2 hours
-                if not last_message or (now - last_message.created_at.replace(tzinfo=None)) > timedelta(hours=2):
+                # If no user messages found or last user message is older than 2 hours
+                if not last_user_message or (now - last_user_message.created_at.replace(tzinfo=None)) > timedelta(hours=2):
                     to_delete.append(channel.id)
                     logger.info(f"Marking channel {channel.name} for deletion - inactive for 2+ hours")
                     
@@ -697,7 +725,7 @@ async def cleanup_inactive_lobbies():
         channel = bot.get_channel(channel_id)
         if channel:
             try:
-                await channel.delete(reason="Inactive lobby (2h no messages)")
+                await channel.delete(reason="Inactive lobby")
                 logger.info(f"Deleted inactive lobby channel: {channel.name}")
             except Exception as e:
                 logger.error(f"Error deleting inactive lobby channel {channel_id}: {e}")
@@ -975,7 +1003,8 @@ async def join_lobby(ctx, lobby_hash: str):
                 return
             # Enforce the 3-player limit for tracked lobbies
             if len(lobby['players']) >= 3:
-                await ctx.send(f"❌ This lobby is full! ({len(lobby['players'])}/3 players)\nPlayers in lobby: {', '.join([bot.get_user(pid).display_name for pid in lobby['players']])}")
+                player_names = [bot.get_user(pid).display_name for pid in lobby['players']]
+                await ctx.send(f"❌ This lobby is full! ({len(lobby['players'])}/3 players)\nPlayers in lobby: {', '.join(player_names)}")
                 return
             lobby['players'].append(ctx.author.id)
             user_sessions[ctx.author.id] = channel.id
@@ -993,12 +1022,14 @@ async def join_lobby(ctx, lobby_hash: str):
                         if input_hash in message.content.lower():
                             # Check if channel is full by counting members with read permissions
                             member_count = 0
+                            player_names = []
                             for member in channel.members:
                                 if channel.permissions_for(member).read_messages and not member.bot:
                                     member_count += 1
+                                    player_names.append(member.display_name)
                             
                             if member_count >= 3:
-                                await ctx.send(f"❌ This lobby is full! ({member_count}/3 players)\nPlayers in lobby: {', '.join([m.display_name for m in channel.members if channel.permissions_for(m).read_messages and not m.bot])}")
+                                await ctx.send(f"❌ This lobby is full! ({member_count}/3 players)\nPlayers in lobby: {', '.join(player_names)}")
                                 return
                                 
                             # Found the hash in this channel, allow unlimited joins
