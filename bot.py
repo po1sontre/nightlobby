@@ -687,18 +687,18 @@ async def cleanup_inactive_lobbies():
                 if not lobby:
                     continue
 
-                # Check if this is a new lobby (less than 3 minutes old)
-                if (now - lobby['created_at'].replace(tzinfo=None)) <= timedelta(minutes=3):
-                    # For new lobbies, check if there are any non-bot messages
-                    has_user_messages = False
-                    async for msg in channel.history(limit=50):
-                        if not msg.author.bot:  # Only count non-bot messages
-                            has_user_messages = True
+                # Check if this is a new lobby (less than 10 minutes old)
+                if (now - lobby['created_at'].replace(tzinfo=None)) <= timedelta(minutes=10):
+                    # For new lobbies, check if there are any players
+                    has_players = False
+                    for member in channel.members:
+                        if not member.bot and channel.permissions_for(member).read_messages:
+                            has_players = True
                             break
                     
-                    if not has_user_messages:
+                    if not has_players:
                         to_delete.append(channel.id)
-                        logger.info(f"Marking new channel {channel.name} for deletion - no user messages in first 3 minutes")
+                        logger.info(f"Marking new channel {channel.name} for deletion - no players in first 10 minutes")
                     continue
 
                 # For older lobbies, check last non-bot message
@@ -710,8 +710,16 @@ async def cleanup_inactive_lobbies():
                 
                 # If no user messages found or last user message is older than 2 hours
                 if not last_user_message or (now - last_user_message.created_at.replace(tzinfo=None)) > timedelta(hours=2):
-                    to_delete.append(channel.id)
-                    logger.info(f"Marking channel {channel.name} for deletion - inactive for 2+ hours")
+                    # Double check if there are any players before deleting
+                    has_players = False
+                    for member in channel.members:
+                        if not member.bot and channel.permissions_for(member).read_messages:
+                            has_players = True
+                            break
+                    
+                    if not has_players:
+                        to_delete.append(channel.id)
+                        logger.info(f"Marking channel {channel.name} for deletion - inactive for 2+ hours")
                     
             except Exception as e:
                 logger.error(f"Error checking inactivity for channel {channel.name}: {e}")
