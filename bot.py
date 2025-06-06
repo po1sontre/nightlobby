@@ -279,10 +279,6 @@ async def on_ready():
                     "The bot was restarted for maintenance or updates.\n"
                     "Most features should work as normal, but some features may temporarily behave differently.\n"
                     "If you notice any issues, please ping @po1sontre.\n\n"
-                    "**New Features:**\n"
-                    "• `/kick_lobby` - Anyone in a lobby can kick another member.\n"
-                    "• `/help` - See all available commands.\n"
-                    "• Slash commands and auto-suggestions are now supported!\n"
                 ),
                 color=0x00ff00
             )
@@ -675,7 +671,7 @@ async def on_interaction(interaction: discord.Interaction):
 
 @tasks.loop(minutes=1)
 async def cleanup_inactive_lobbies():
-    """Clean up inactive lobbies that haven't had messages in 2 hours, or 3 minutes if newly created"""
+    """Clean up inactive lobbies that haven't had messages in 2 hours, or 10 minutes if newly created"""
     now = datetime.utcnow()
     to_delete = []
     
@@ -1061,23 +1057,6 @@ async def find_match(ctx):
             del user_sessions[user_id]
         return
     
-    # Check if user already has a pending request
-    if user_id in pending_requests:
-        await ctx.send("❌ You already have a pending match request. Please wait for responses or use `/cancel_request` to cancel.", ephemeral=True)
-        return
-    
-    # Create a unique request ID
-    request_id = str(uuid.uuid4())
-    
-    # Store the request
-    pending_requests[user_id] = {
-        'request_id': request_id,
-        'user_id': user_id,
-        'username': ctx.author.display_name,
-        'timestamp': datetime.now(),
-        'responses': set()
-    }
-    
     # Create the request embed
     embed = discord.Embed(
         title="🎮 Match Request",
@@ -1090,9 +1069,8 @@ async def find_match(ctx):
         value="Use `/allow` to accept this player\nUse `/deny` to decline",
         inline=False
     )
-    embed.set_footer(text=f"Request ID: {request_id}")
     
-    # Send the request to all active lobbies
+    # Send the request to all non-full lobbies
     sent_count = 0
     for channel_id, lobby_data in active_lobbies.items():
         channel = bot.get_channel(channel_id)
@@ -1105,21 +1083,11 @@ async def find_match(ctx):
     
     if sent_count == 0:
         await ctx.send("❌ No available lobbies found to send your request to.", ephemeral=True)
-        del pending_requests[user_id]
         return
-    
-    # Create timeout task
-    async def request_timeout():
-        await asyncio.sleep(300)  # 5 minute timeout
-        if user_id in pending_requests and pending_requests[user_id]['request_id'] == request_id:
-            await ctx.send("⏰ Your match request has expired. No lobbies responded in time.", ephemeral=True)
-            del pending_requests[user_id]
-    
-    request_timeouts[request_id] = asyncio.create_task(request_timeout())
     
     await ctx.send(
         f"✅ Your match request has been sent to {sent_count} available lobbies!\n"
-        "Waiting for responses... (5 minute timeout)",
+        "Waiting for responses...",
         ephemeral=True
     )
 
@@ -1307,27 +1275,46 @@ async def help_command(ctx):
         description="Here are all available commands:",
         color=0x00ff00
     )
-    embed.add_field(
-        name="Lobby Commands",
-        value=(
-            "`/create_game` - Create a new NightReign lobby\n"
-            "`/my_lobby` - Check your current lobby status\n"
-            "`/lobbies` - List all active lobbies\n"
-            "`/leave_lobby` - Leave your current lobby\n"
-            "`/end_lobby` - End the current lobby (owner/mod/role only)\n"
-            "`/invite_lobby @user` - Invite a player to your lobby\n"
-            "`/join_lobby <hash>` - Join a lobby using its hash\n"
-            "`/find_match` - Find players to join your game\n"
-            "`/allow` - Allow a player to join your lobby\n"
-            "`/deny` - Deny a player's request to join\n"
-            "`/cancel_request` - Cancel your pending match request\n"
-            "`/kick_lobby @user` - Kick a player from your current lobby\n"
-            "`/lobbyhelp` - Show all available lobby commands\n"
-            "`/help` - Show this help message"
-        ),
-        inline=False
-    )
-    embed.set_footer(text="Use /<command> for slash commands or type them as text commands.")
+
+    # Check if command is used in a lobby channel
+    if ctx.channel.name.startswith('lobby-'):
+        embed.add_field(
+            name="🎮 Lobby Commands",
+            value=(
+                "`/leave_lobby` - Leave this lobby\n"
+                "`/end_lobby` - End the current lobby (owner/mod/role only)\n"
+                "`/invite_lobby @user` - Invite a player to this lobby\n"
+                "`/kick_lobby @user` - Kick a player from this lobby\n"
+                "`/find_match` - Find players to join your game"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="These commands are only available in lobby channels")
+    else:
+        embed.add_field(
+            name="🎮 Lobby Commands",
+            value=(
+                "`/create_game` - Create a new NightReign lobby\n"
+                "`/my_lobby` - Check your current lobby status\n"
+                "`/lobbies` - List all active lobbies\n"
+                "`/join_lobby <hash>` - Join a lobby using its hash\n"
+                "`/find_match` - Find players to join your game\n"
+                "`/help` or `/lobbyhelp` - See all commands"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="💡 Tips",
+            value=(
+                "• Share your Steam code to auto-create a lobby\n"
+                "• Use `/lobbies` to see all available games\n"
+                "• Use `/find_match` to find players\n"
+                "• Lobbies auto-delete after 3 minutes if unused"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="Use /<command> for slash commands or type them as text commands")
+    
     await ctx.send(embed=embed)
 
 @bot.tree.command(name="help", description="Show all available commands")
