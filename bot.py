@@ -337,62 +337,81 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # Check if the message contains a Steam friend code
-    steam_codes = re.findall(STEAM_CODE_PATTERN, message.content)
-    
-    if steam_codes:
-        logger.info(f"Detected Steam code(s) in message from {message.author}: {steam_codes}")
+    # Process commands
+    await bot.process_commands(message)
+
+@bot.command(name='create_game', description='Create a new NightReign lobby')
+async def create_game(ctx):
+    """Create a new NightReign lobby"""
+    try:
+        user_id = ctx.author.id
         
-        # Skip Steam code detection in private lobby channels
-        if message.channel.name.startswith('lobby-'):
-            await bot.process_commands(message)
-            return
-            
-        # Check if user is already in a session
-        if message.author.id in user_sessions:
-            channel_id = user_sessions[message.author.id]
+        # Check if user already has an active session
+        if user_id in user_sessions:
+            channel_id = user_sessions[user_id]
             existing_channel = bot.get_channel(channel_id)
             if existing_channel:
-                await message.channel.send(
-                    f"❌ {message.author.mention} You're already in an active lobby! "
-                    f"Please leave your current session first: {existing_channel.mention}"
+                await ctx.send(
+                    f"❌ You're already in an active lobby! Leave your current session first: {existing_channel.mention}",
+                    ephemeral=True
                 )
+                return
             else:
                 # Clean up stale session
-                del user_sessions[message.author.id]
+                del user_sessions[user_id]
+
+        # Get the category channel
+        category = ctx.guild.get_channel(1379101422318125159)
+        if not category:
+            await ctx.send("❌ Could not find the lobby category channel.", ephemeral=True)
             return
 
-        # Create a new lobby for the user
+        # Create private lobby channel
+        overwrites = {
+            ctx.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            ctx.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        
+        # Generate a unique channel name
+        timestamp = datetime.now().strftime('%H%M')
+        channel_name = f"lobby-{ctx.author.display_name.lower()}-{timestamp}"
+        
         try:
-            # Create private lobby channel OUTSIDE the Bot Data category
-            overwrites = {
-                message.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                message.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            }
-            channel_name = f"lobby-{message.author.display_name.lower()}-{datetime.now().strftime('%H%M')}"
-            lobby_channel = await message.guild.create_text_channel(
+            lobby_channel = await ctx.guild.create_text_channel(
                 channel_name,
                 overwrites=overwrites,
-                category=message.guild.get_channel(1379101422318125159),  # Create in specified category
-                reason=f"NightReign lobby created by {message.author}"
+                category=category,
+                reason=f"NightReign lobby created by {ctx.author}"
             )
-            logger.info(f"Created new lobby channel {channel_name} for user {message.author}")
+        except discord.Forbidden:
+            await ctx.send("❌ I don't have permission to create channels!", ephemeral=True)
+            return
+        except Exception as e:
+            logger.error(f"Error creating channel: {e}")
+            await ctx.send("❌ An error occurred while creating the lobby channel.", ephemeral=True)
+            return
+
+        # Generate lobby hash and store data
+        lobby_hash = str(uuid.uuid4())
+        lobby_data = {
+            'owner': user_id,
+            'players': [user_id],
+            'channel': lobby_channel.id,
+            'created_at': datetime.now(),
+            'hash': lobby_hash,
+            'hash_message_id': None
+        }
+        
+        try:
             # Store lobby data
-            lobby_hash = str(uuid.uuid4())
-            lobby_data = {
-                'owner': message.author.id,
-                'players': [message.author.id],
-                'channel': lobby_channel.id,
-                'created_at': datetime.now(),
-                'hash': lobby_hash,
-                'hash_message_id': None
-            }
             active_lobbies[lobby_channel.id] = lobby_data
-            user_sessions[message.author.id] = lobby_channel.id
+            user_sessions[user_id] = lobby_channel.id
+            
             # Send the hash message in the lobby channel
             hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`\nQuick Join: `/join_lobby {lobby_hash}`")
             lobby_data['hash_message_id'] = hash_msg.id
+            
             # Send welcome message in lobby channel
             welcome_embed = discord.Embed(
                 title="🎉 Welcome to your NightReign Lobby!",
@@ -415,12 +434,8 @@ async def on_message(message):
                 inline=False
             )
             await lobby_channel.send(embed=welcome_embed)
-            # Notify the user
-            await message.channel.send(
-                f"🎮 {message.author.mention} I've created a lobby for you! "
-                f"Click here to go to your lobby: {lobby_channel.mention}"
-            )
-            # In both /create_game and Steam friend code detection, after creating the lobby and hash, send the join_embed in the original channel
+            
+            # Send join embed in the original channel
             join_embed = discord.Embed(
                 title="🕹️ NightReign Lobby",
                 color=0x00ff00,
@@ -428,7 +443,7 @@ async def on_message(message):
             )
             join_embed.add_field(
                 name="Players (1/3)",
-                value=f"👑 {message.author.display_name if hasattr(message, 'author') else ctx.author.display_name}",
+                value=f"👑 {ctx.author.display_name}",
                 inline=False
             )
             join_embed.add_field(
@@ -447,118 +462,32 @@ async def on_message(message):
                 inline=False
             )
             join_embed.set_footer(text="Use the Quick Join command below to join this lobby!")
-            msg = await (message.channel.send if hasattr(message, 'channel') else ctx.send)(embed=join_embed)
+            msg = await ctx.send(embed=join_embed)
             lobby_data['join_message_id'] = msg.id
-        except discord.Forbidden:
-            logger.error(f"Permission error creating channel for user {message.author}")
-            await message.channel.send("❌ I don't have permission to create channels!")
-        except Exception as e:
-            logger.error(f"Error creating lobby for user {message.author}: {str(e)}")
-            await message.channel.send(f"❌ Error creating lobby: {str(e)}")
-    # Process commands after checking for Steam codes
-    await bot.process_commands(message)
-
-@bot.command(name='create_game', description='Create a new NightReign lobby')
-async def create_game(ctx):
-    """Create a new NightReign lobby"""
-    user_id = ctx.author.id
-    # Check if user already has an active session
-    if user_id in user_sessions:
-        channel_id = user_sessions[user_id]
-        existing_channel = bot.get_channel(channel_id)
-        if existing_channel:
+            
+            # Notify the user
             await ctx.send(
-                f"❌ You're already in an active lobby! Leave your current session first: {existing_channel.mention}",
+                f"🎮 {ctx.author.mention} I've created a lobby for you! "
+                f"Click here to go to your lobby: {lobby_channel.mention}",
                 ephemeral=True
             )
-        else:
-            # Clean up stale session
-            del user_sessions[user_id]
-        return
-    try:
-        # Create private lobby channel OUTSIDE the Bot Data category
-        overwrites = {
-            ctx.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            ctx.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
-        channel_name = f"lobby-{ctx.author.display_name.lower()}-{datetime.now().strftime('%H%M')}"
-        lobby_channel = await ctx.guild.create_text_channel(
-            channel_name,
-            overwrites=overwrites,
-            category=ctx.guild.get_channel(1379101422318125159),  # Create in specified category
-            reason=f"NightReign lobby created by {ctx.author}"
-        )
-        # Store lobby data
-        lobby_hash = str(uuid.uuid4())
-        lobby_data = {
-            'owner': user_id,
-            'players': [user_id],
-            'channel': lobby_channel.id,
-            'created_at': datetime.now(),
-            'hash': lobby_hash,
-            'hash_message_id': None
-        }
-        active_lobbies[lobby_channel.id] = lobby_data
-        user_sessions[user_id] = lobby_channel.id
-        # Send the hash message in the lobby channel
-        hash_msg = await lobby_channel.send(f"Lobby Hash: `{lobby_hash}`\nQuick Join: `/join_lobby {lobby_hash}`")
-        lobby_data['hash_message_id'] = hash_msg.id
-        # Send welcome message in lobby channel
-        welcome_embed = discord.Embed(
-            title="🎉 Welcome to your NightReign Lobby!",
-            description=f"Lobby Hash: `{lobby_hash}`\n\nUse the commands below to manage your lobby:",
-            color=0x00ff00
-        )
-        welcome_embed.add_field(
-            name="📋 Lobby Commands",
-            value=(
-                f"• `/join_lobby {lobby_hash}` — Join this lobby\n"
-                f"• `/leave_lobby` — Leave this lobby\n"
-                f"• `/invite_lobby @user` — Invite a user to this lobby\n"
-                f"• `/end_lobby` — End the lobby (owner/mod only)"
-            ),
-            inline=False
-        )
-        welcome_embed.add_field(
-            name="Instructions",
-            value="Share your Steam friend codes, coordinate your game time, and use the commands above to manage your session.",
-            inline=False
-        )
-        await lobby_channel.send(embed=welcome_embed)
-        # In both /create_game and Steam friend code detection, after creating the lobby and hash, send the join_embed in the original channel
-        join_embed = discord.Embed(
-            title="🕹️ NightReign Lobby",
-            color=0x00ff00,
-            timestamp=datetime.now()
-        )
-        join_embed.add_field(
-            name="Players (1/3)",
-            value=f"👑 {ctx.author.display_name}",
-            inline=False
-        )
-        join_embed.add_field(
-            name="Lobby Channel",
-            value=f"{lobby_channel.mention}",
-            inline=True
-        )
-        join_embed.add_field(
-            name="Status",
-            value="🟢 **OPEN** - Need 2 more players",
-            inline=True
-        )
-        join_embed.add_field(
-            name="How to Join",
-            value=f"**To join this lobby, copy and paste the command below:**\n```/join_lobby {lobby_hash}```",
-            inline=False
-        )
-        join_embed.set_footer(text="Use the Quick Join command below to join this lobby!")
-        msg = await ctx.send(embed=join_embed)
-        lobby_data['join_message_id'] = msg.id
-    except discord.Forbidden:
-        await ctx.send("❌ I don't have permission to create channels!")
+            
+        except Exception as e:
+            logger.error(f"Error setting up lobby: {e}")
+            # Clean up if something goes wrong
+            try:
+                await lobby_channel.delete(reason="Error during lobby setup")
+            except:
+                pass
+            if lobby_channel.id in active_lobbies:
+                del active_lobbies[lobby_channel.id]
+            if user_id in user_sessions:
+                del user_sessions[user_id]
+            await ctx.send("❌ An error occurred while setting up the lobby. Please try again.", ephemeral=True)
+            
     except Exception as e:
-        await ctx.send(f"❌ Error creating lobby: {str(e)}")
+        logger.error(f"Unexpected error in create_game: {e}")
+        await ctx.send("❌ An unexpected error occurred. Please try again.", ephemeral=True)
 
 @bot.command(name='my_lobby', description='Check your current lobby status')
 async def my_lobby(ctx):
@@ -692,6 +621,7 @@ async def cleanup_inactive_lobbies():
                     # For new lobbies, check if there are any players
                     has_players = False
                     for member in channel.members:
+                        # Check if member has read permissions and is not a bot
                         if not member.bot and channel.permissions_for(member).read_messages:
                             has_players = True
                             break
@@ -707,41 +637,41 @@ async def cleanup_inactive_lobbies():
                     if not msg.author.bot:  # Only count non-bot messages
                         last_user_message = msg
                         break
-                
-                # If no user messages found or last user message is older than 2 hours
-                if not last_user_message or (now - last_user_message.created_at.replace(tzinfo=None)) > timedelta(hours=2):
-                    # Double check if there are any players before deleting
-                    has_players = False
-                    for member in channel.members:
-                        if not member.bot and channel.permissions_for(member).read_messages:
-                            has_players = True
-                            break
-                    
-                    if not has_players:
+
+                # If no user messages in 2 hours, mark for deletion
+                if last_user_message:
+                    message_age = now - last_user_message.created_at.replace(tzinfo=None)
+                    if message_age > timedelta(hours=2):
                         to_delete.append(channel.id)
-                        logger.info(f"Marking channel {channel.name} for deletion - inactive for 2+ hours")
-                    
+                        logger.info(f"Marking channel {channel.name} for deletion - no activity for {message_age.total_seconds()/3600:.1f} hours")
+                else:
+                    # If no messages at all, check channel age
+                    channel_age = now - channel.created_at.replace(tzinfo=None)
+                    if channel_age > timedelta(hours=2):
+                        to_delete.append(channel.id)
+                        logger.info(f"Marking channel {channel.name} for deletion - no messages and {channel_age.total_seconds()/3600:.1f} hours old")
+
             except Exception as e:
-                logger.error(f"Error checking inactivity for channel {channel.name}: {e}")
-    
-    # Delete marked channels and clean up data
+                logger.error(f"Error checking channel {channel.name}: {e}")
+                continue
+
+    # Delete marked channels
     for channel_id in to_delete:
-        channel = bot.get_channel(channel_id)
-        if channel:
-            try:
-                await channel.delete(reason="Inactive lobby")
-                logger.info(f"Deleted inactive lobby channel: {channel.name}")
-            except Exception as e:
-                logger.error(f"Error deleting inactive lobby channel {channel_id}: {e}")
-        
-        # Clean up data structures
-        if channel_id in active_lobbies:
-            del active_lobbies[channel_id]
-        
-        # Remove all user_sessions for this channel
-        for uid in list(user_sessions):
-            if user_sessions[uid] == channel_id:
-                del user_sessions[uid]
+        try:
+            channel = bot.get_channel(channel_id)
+            if channel:
+                # Clean up data structures
+                if channel_id in active_lobbies:
+                    lobby = active_lobbies[channel_id]
+                    for pid in lobby['players']:
+                        if pid in user_sessions:
+                            del user_sessions[pid]
+                    del active_lobbies[channel_id]
+                
+                await channel.delete(reason="Inactive lobby cleanup")
+                logger.info(f"Deleted inactive channel {channel.name}")
+        except Exception as e:
+            logger.error(f"Error deleting channel {channel_id}: {e}")
 
 @bot.event
 async def on_member_join(member):
@@ -756,9 +686,8 @@ async def on_member_join(member):
                 "I'm your friendly NightReign Lobby Bot! Here's how to get started:\n\n"
                 "**Quick Start:**\n"
                 "1. Use `/create_game` to create a lobby\n"
-                "2. Share your Steam friend code in the lobby\n"
-                "3. Use `/find_match` to find other players\n"
-                "4. Use `/lobbies` to see all active games\n\n"
+                "2. Use `/find_match` to find other players\n"
+                "3. Use `/lobbies` to see all active games\n\n"
                 "**Need Help?**\n"
                 "• Use `/lobbyhelp` for all commands\n"
                 "• Use `/find_match` to find players\n"
@@ -967,9 +896,8 @@ async def lobby_help(ctx):
         name="🚀 Quick Start",
         value=(
             "1. Type `/create_game` to create a lobby\n"
-            "2. Share your Steam friend code in the lobby\n"
-            "3. Use the 'Join Game' button to join others' lobbies\n"
-            "4. Use 'Leave Lobby' when you're done"
+            "2. Use the 'Join Game' button to join others' lobbies\n"
+            "3. Use 'Leave Lobby' when you're done"
         ),
         inline=False
     )
@@ -978,10 +906,9 @@ async def lobby_help(ctx):
     embed.add_field(
         name="💡 Tips",
         value=(
-            "• Share your Steam code to auto-create a lobby\n"
             "• Check #nightreign-online for game setup\n"
             "• Use `/invite_lobby @user` to invite friends directly\n"
-            "• Lobbies auto-delete after 5 minutes of being empty"
+            "• Lobbies auto-delete after 10 minutes if unused"
         ),
         inline=False
     )
@@ -993,58 +920,125 @@ async def lobby_help(ctx):
 @bot.command(name='join_lobby', description='Join a lobby using its hash')
 async def join_lobby(ctx, lobby_hash: str):
     """Join a lobby by its hash"""
-    input_hash = lobby_hash.strip().lower()
-    # First, try active_lobbies as before
-    for lobby in active_lobbies.values():
-        stored_hash = str(lobby['hash']).strip().lower()
-        if stored_hash == input_hash:
-            channel = bot.get_channel(lobby['channel'])
-            if not channel:
-                await ctx.send("❌ That lobby no longer exists.")
+    try:
+        input_hash = lobby_hash.strip().lower()
+        
+        # Check if user is already in a lobby
+        if ctx.author.id in user_sessions:
+            channel_id = user_sessions[ctx.author.id]
+            existing_channel = bot.get_channel(channel_id)
+            if existing_channel:
+                await ctx.send(
+                    f"❌ You're already in an active lobby! Leave your current session first: {existing_channel.mention}",
+                    ephemeral=True
+                )
                 return
-            if ctx.author.id in lobby['players']:
-                await ctx.send("❌ You are already in this lobby.")
-                return
-            # Enforce the 3-player limit for tracked lobbies
-            if len(lobby['players']) >= 3:
-                player_names = [bot.get_user(pid).display_name for pid in lobby['players']]
-                await ctx.send(f"❌ This lobby is full! ({len(lobby['players'])}/3 players)\nPlayers in lobby: {', '.join(player_names)}")
-                return
-            lobby['players'].append(ctx.author.id)
-            user_sessions[ctx.author.id] = channel.id
-            await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
-            await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! ({len(lobby['players'])}/3 players)")
-            await ctx.send(f"🎮 You've joined the lobby! Click here to go to the channel: {channel.mention}")
-            return
+            else:
+                # Clean up stale session
+                del user_sessions[ctx.author.id]
 
-    # If not found in active_lobbies, search all text channels for the hash
-    for guild in bot.guilds:
-        for channel in guild.text_channels:
-            try:
-                async for message in channel.history(limit=20):
-                    if message.author == bot.user and message.content and message.content.lower().startswith('lobby hash:'):
-                        if input_hash in message.content.lower():
-                            # Check if channel is full by counting members with read permissions
-                            member_count = 0
-                            player_names = []
-                            for member in channel.members:
-                                if channel.permissions_for(member).read_messages and not member.bot:
-                                    member_count += 1
-                                    player_names.append(member.display_name)
-                            
-                            if member_count >= 3:
-                                await ctx.send(f"❌ This lobby is full! ({member_count}/3 players)\nPlayers in lobby: {', '.join(player_names)}")
-                                return
+        # First, try active_lobbies
+        for lobby in active_lobbies.values():
+            stored_hash = str(lobby['hash']).strip().lower()
+            if stored_hash == input_hash:
+                channel = bot.get_channel(lobby['channel'])
+                if not channel:
+                    await ctx.send("❌ That lobby no longer exists.", ephemeral=True)
+                    return
+                    
+                if ctx.author.id in lobby['players']:
+                    await ctx.send("❌ You are already in this lobby.", ephemeral=True)
+                    return
+                    
+                # Enforce the 3-player limit
+                if len(lobby['players']) >= 3:
+                    player_names = [bot.get_user(pid).display_name for pid in lobby['players']]
+                    await ctx.send(f"❌ This lobby is full! ({len(lobby['players'])}/3 players)\nPlayers in lobby: {', '.join(player_names)}", ephemeral=True)
+                    return
+                    
+                try:
+                    # Add player to lobby data
+                    lobby['players'].append(ctx.author.id)
+                    user_sessions[ctx.author.id] = channel.id
+                    
+                    # Set permissions
+                    await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
+                    
+                    # Send join message
+                    await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! ({len(lobby['players'])}/3 players)")
+                    
+                    # Notify the user
+                    await ctx.send(f"🎮 You've joined the lobby! Click here to go to the channel: {channel.mention}", ephemeral=True)
+                    return
+                except discord.Forbidden:
+                    await ctx.send("❌ I don't have permission to add you to this channel.", ephemeral=True)
+                    return
+                except Exception as e:
+                    logger.error(f"Error joining lobby: {e}")
+                    await ctx.send("❌ An error occurred while joining the lobby.", ephemeral=True)
+                    return
+
+        # If not found in active_lobbies, search all text channels
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                if not channel.name.startswith('lobby-'):
+                    continue
+                    
+                try:
+                    async for message in channel.history(limit=20):
+                        if message.author == bot.user and message.content and message.content.lower().startswith('lobby hash:'):
+                            if input_hash in message.content.lower():
+                                # Check if channel is full
+                                member_count = 0
+                                player_names = []
+                                for member in channel.members:
+                                    if channel.permissions_for(member).read_messages and not member.bot:
+                                        member_count += 1
+                                        player_names.append(member.display_name)
                                 
-                            # Found the hash in this channel, allow unlimited joins
-                            await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
-                            await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! ({member_count + 1}/3 players)")
-                            await ctx.send(f"🎮 You've joined the lobby! Click here to go to the channel: {channel.mention}")
-                            return
-            except Exception:
-                continue
-                
-    await ctx.send("❌ No lobby found with that hash.")
+                                if member_count >= 3:
+                                    await ctx.send(f"❌ This lobby is full! ({member_count}/3 players)\nPlayers in lobby: {', '.join(player_names)}", ephemeral=True)
+                                    return
+                                    
+                                try:
+                                    # Set permissions
+                                    await channel.set_permissions(ctx.author, read_messages=True, send_messages=True)
+                                    
+                                    # Add to active_lobbies if not already there
+                                    if channel.id not in active_lobbies:
+                                        active_lobbies[channel.id] = {
+                                            'owner': channel.members[0].id if channel.members else ctx.author.id,
+                                            'players': [m.id for m in channel.members if not m.bot],
+                                            'channel': channel.id,
+                                            'created_at': channel.created_at,
+                                            'hash': input_hash,
+                                            'hash_message_id': message.id
+                                        }
+                                    
+                                    # Add to user_sessions
+                                    user_sessions[ctx.author.id] = channel.id
+                                    
+                                    # Send join message
+                                    await channel.send(f"🎉 **{ctx.author.display_name}** joined the lobby! ({member_count + 1}/3 players)")
+                                    
+                                    # Notify the user
+                                    await ctx.send(f"🎮 You've joined the lobby! Click here to go to the channel: {channel.mention}", ephemeral=True)
+                                    return
+                                except discord.Forbidden:
+                                    await ctx.send("❌ I don't have permission to add you to this channel.", ephemeral=True)
+                                    return
+                                except Exception as e:
+                                    logger.error(f"Error joining lobby: {e}")
+                                    await ctx.send("❌ An error occurred while joining the lobby.", ephemeral=True)
+                                    return
+                except Exception as e:
+                    logger.error(f"Error searching channel {channel.name}: {e}")
+                    continue
+                    
+        await ctx.send("❌ No lobby found with that hash.", ephemeral=True)
+    except Exception as e:
+        logger.error(f"Unexpected error in join_lobby: {e}")
+        await ctx.send("❌ An unexpected error occurred. Please try again.", ephemeral=True)
 
 @bot.command(name='find_match', description='Find players to join your game')
 async def find_match(ctx):
@@ -1314,10 +1308,9 @@ async def help_command(ctx):
         embed.add_field(
             name="💡 Tips",
             value=(
-                "• Share your Steam code to auto-create a lobby\n"
                 "• Use `/lobbies` to see all available games\n"
                 "• Use `/find_match` to find players\n"
-                "• Lobbies auto-delete after 3 minutes if unused"
+                "• Lobbies auto-delete after 10 minutes if unused"
             ),
             inline=False
         )
