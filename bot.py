@@ -618,38 +618,62 @@ async def cleanup_inactive_lobbies():
 
                 # Check if this is a new lobby (less than 10 minutes old)
                 if (now - lobby['created_at'].replace(tzinfo=None)) <= timedelta(minutes=10):
-                    # For new lobbies, check if there are any players
+                    # For new lobbies, check if there are any players with permissions
                     has_players = False
-                    for member in channel.members:
-                        # Check if member has read permissions and is not a bot
+                    # Get all members with read permissions
+                    for member in guild.members:
                         if not member.bot and channel.permissions_for(member).read_messages:
                             has_players = True
                             break
                     
                     if not has_players:
                         to_delete.append(channel.id)
-                        logger.info(f"Marking new channel {channel.name} for deletion - no players in first 10 minutes")
+                        logger.info(f"Marking new channel {channel.name} for deletion - no players with permissions in first 10 minutes")
                     continue
 
-                # For older lobbies, check last non-bot message
-                last_user_message = None
-                async for msg in channel.history(limit=50):
-                    if not msg.author.bot:  # Only count non-bot messages
-                        last_user_message = msg
-                        break
+                # For older lobbies, check last non-bot message and player count
+                player_count = len(lobby['players'])
+                
+                # If there are players in the lobby, be more lenient with cleanup
+                if player_count > 0:
+                    # Only check for messages if there are players
+                    last_user_message = None
+                    async for msg in channel.history(limit=50):
+                        if not msg.author.bot:  # Only count non-bot messages
+                            last_user_message = msg
+                            break
 
-                # If no user messages in 2 hours, mark for deletion
-                if last_user_message:
-                    message_age = now - last_user_message.created_at.replace(tzinfo=None)
-                    if message_age > timedelta(hours=2):
-                        to_delete.append(channel.id)
-                        logger.info(f"Marking channel {channel.name} for deletion - no activity for {message_age.total_seconds()/3600:.1f} hours")
+                    # If no user messages in 30 minutes (instead of 2 hours) and no players, mark for deletion
+                    if last_user_message:
+                        message_age = now - last_user_message.created_at.replace(tzinfo=None)
+                        if message_age > timedelta(minutes=30) and player_count == 0:
+                            to_delete.append(channel.id)
+                            logger.info(f"Marking channel {channel.name} for deletion - no activity for {message_age.total_seconds()/60:.1f} minutes and no players")
+                    else:
+                        # If no messages at all and no players, check channel age
+                        if player_count == 0:
+                            channel_age = now - channel.created_at.replace(tzinfo=None)
+                            if channel_age > timedelta(minutes=30):
+                                to_delete.append(channel.id)
+                                logger.info(f"Marking channel {channel.name} for deletion - no messages, no players, and {channel_age.total_seconds()/60:.1f} minutes old")
                 else:
-                    # If no messages at all, check channel age
-                    channel_age = now - channel.created_at.replace(tzinfo=None)
-                    if channel_age > timedelta(hours=2):
-                        to_delete.append(channel.id)
-                        logger.info(f"Marking channel {channel.name} for deletion - no messages and {channel_age.total_seconds()/3600:.1f} hours old")
+                    # If no players at all, use the original 2-hour timeout
+                    last_user_message = None
+                    async for msg in channel.history(limit=50):
+                        if not msg.author.bot:
+                            last_user_message = msg
+                            break
+
+                    if last_user_message:
+                        message_age = now - last_user_message.created_at.replace(tzinfo=None)
+                        if message_age > timedelta(hours=2):
+                            to_delete.append(channel.id)
+                            logger.info(f"Marking channel {channel.name} for deletion - no activity for {message_age.total_seconds()/3600:.1f} hours")
+                    else:
+                        channel_age = now - channel.created_at.replace(tzinfo=None)
+                        if channel_age > timedelta(hours=2):
+                            to_delete.append(channel.id)
+                            logger.info(f"Marking channel {channel.name} for deletion - no messages and {channel_age.total_seconds()/3600:.1f} hours old")
 
             except Exception as e:
                 logger.error(f"Error checking channel {channel.name}: {e}")
