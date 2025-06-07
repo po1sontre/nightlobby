@@ -616,64 +616,25 @@ async def cleanup_inactive_lobbies():
                 if not lobby:
                     continue
 
-                # Check if this is a new lobby (less than 10 minutes old)
-                if (now - lobby['created_at'].replace(tzinfo=None)) <= timedelta(minutes=10):
-                    # For new lobbies, check if there are any players with permissions
-                    has_players = False
-                    # Get all members with read permissions
-                    for member in guild.members:
-                        if not member.bot and channel.permissions_for(member).read_messages:
-                            has_players = True
-                            break
-                    
-                    if not has_players:
+                # Check last non-bot message
+                last_user_message = None
+                async for msg in channel.history(limit=50):
+                    if not msg.author.bot:  # Only count non-bot messages
+                        last_user_message = msg
+                        break
+
+                # If no user messages in 2 hours, mark for deletion
+                if last_user_message:
+                    message_age = now - last_user_message.created_at.replace(tzinfo=None)
+                    if message_age > timedelta(hours=2):
                         to_delete.append(channel.id)
-                        logger.info(f"Marking new channel {channel.name} for deletion - no players with permissions in first 10 minutes")
-                    continue
-
-                # For older lobbies, check last non-bot message and player count
-                player_count = len(lobby['players'])
-                
-                # If there are players in the lobby, be more lenient with cleanup
-                if player_count > 0:
-                    # Only check for messages if there are players
-                    last_user_message = None
-                    async for msg in channel.history(limit=50):
-                        if not msg.author.bot:  # Only count non-bot messages
-                            last_user_message = msg
-                            break
-
-                    # If no user messages in 30 minutes (instead of 2 hours) and no players, mark for deletion
-                    if last_user_message:
-                        message_age = now - last_user_message.created_at.replace(tzinfo=None)
-                        if message_age > timedelta(minutes=30) and player_count == 0:
-                            to_delete.append(channel.id)
-                            logger.info(f"Marking channel {channel.name} for deletion - no activity for {message_age.total_seconds()/60:.1f} minutes and no players")
-                    else:
-                        # If no messages at all and no players, check channel age
-                        if player_count == 0:
-                            channel_age = now - channel.created_at.replace(tzinfo=None)
-                            if channel_age > timedelta(minutes=30):
-                                to_delete.append(channel.id)
-                                logger.info(f"Marking channel {channel.name} for deletion - no messages, no players, and {channel_age.total_seconds()/60:.1f} minutes old")
+                        logger.info(f"Marking channel {channel.name} for deletion - no activity for {message_age.total_seconds()/3600:.1f} hours")
                 else:
-                    # If no players at all, use the original 2-hour timeout
-                    last_user_message = None
-                    async for msg in channel.history(limit=50):
-                        if not msg.author.bot:
-                            last_user_message = msg
-                            break
-
-                    if last_user_message:
-                        message_age = now - last_user_message.created_at.replace(tzinfo=None)
-                        if message_age > timedelta(hours=2):
-                            to_delete.append(channel.id)
-                            logger.info(f"Marking channel {channel.name} for deletion - no activity for {message_age.total_seconds()/3600:.1f} hours")
-                    else:
-                        channel_age = now - channel.created_at.replace(tzinfo=None)
-                        if channel_age > timedelta(hours=2):
-                            to_delete.append(channel.id)
-                            logger.info(f"Marking channel {channel.name} for deletion - no messages and {channel_age.total_seconds()/3600:.1f} hours old")
+                    # If no messages at all, check channel age
+                    channel_age = now - channel.created_at.replace(tzinfo=None)
+                    if channel_age > timedelta(hours=2):
+                        to_delete.append(channel.id)
+                        logger.info(f"Marking channel {channel.name} for deletion - no messages and {channel_age.total_seconds()/3600:.1f} hours old")
 
             except Exception as e:
                 logger.error(f"Error checking channel {channel.name}: {e}")
@@ -903,41 +864,43 @@ async def lobby_help(ctx):
         color=0x00ff00
     )
     
-    # Basic Commands
-    embed.add_field(
-        name="📋 Commands",
-        value=(
-            "`/create_game` - Create a new game lobby\n"
-            "`/my_lobby` - Check your current lobby status\n"
-            "`/lobbies` - List all active lobbies\n"
-            "`/invite_lobby @user` - Invite a player to your current lobby"
-        ),
-        inline=False
-    )
-    
-    # Quick Start
-    embed.add_field(
-        name="🚀 Quick Start",
-        value=(
-            "1. Type `/create_game` to create a lobby\n"
-            "2. Use the 'Join Game' button to join others' lobbies\n"
-            "3. Use 'Leave Lobby' when you're done"
-        ),
-        inline=False
-    )
-    
-    # Tips
-    embed.add_field(
-        name="💡 Tips",
-        value=(
-            "• Check #nightreign-online for game setup\n"
-            "• Use `/invite_lobby @user` to invite friends directly\n"
-            "• Lobbies auto-delete after 10 minutes if unused"
-        ),
-        inline=False
-    )
-    
-    embed.set_footer(text="Need more help? Contact a moderator!")
+    # Check if command is used in a lobby channel
+    if ctx.channel.name.startswith('lobby-'):
+        embed.add_field(
+            name="🎮 Lobby Commands",
+            value=(
+                "`/leave_lobby` - Leave this lobby\n"
+                "`/end_lobby` - End the current lobby (owner/mod/role only)\n"
+                "`/invite_lobby @user` - Invite a player to this lobby\n"
+                "`/kick_lobby @user` - Kick a player from this lobby\n"
+                "`/find_match` - Find players to join your game"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="These commands are only available in lobby channels")
+    else:
+        embed.add_field(
+            name="🎮 Lobby Commands",
+            value=(
+                "`/create_game` - Create a new NightReign lobby\n"
+                "`/my_lobby` - Check your current lobby status\n"
+                "`/lobbies` - List all active lobbies\n"
+                "`/join_lobby <hash>` - Join a lobby using its hash\n"
+                "`/find_match` - Find players to join your game\n"
+                "`/help` or `/lobbyhelp` - See all commands"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="💡 Tips",
+            value=(
+                "• Use `/lobbies` to see all available games\n"
+                "• Use `/find_match` to find players\n"
+                "• Lobbies auto-delete after 2 hours of inactivity"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="Use /<command> for slash commands or type them as text commands")
     
     await ctx.send(embed=embed)
 
@@ -1292,55 +1255,6 @@ async def kick_lobby(ctx, member: discord.Member):
         await ctx.send(f"✅ {member.display_name} has been kicked from the lobby.", ephemeral=True)
     except Exception as e:
         await ctx.send(f"❌ Error kicking {member.display_name}: {str(e)}", ephemeral=True)
-
-@bot.command(name='help', description='Show all available commands')
-async def help_command(ctx):
-    """Show all available commands and their descriptions"""
-    embed = discord.Embed(
-        title="🤖 NightReign Bot Help",
-        description="Here are all available commands:",
-        color=0x00ff00
-    )
-
-    # Check if command is used in a lobby channel
-    if ctx.channel.name.startswith('lobby-'):
-        embed.add_field(
-            name="🎮 Lobby Commands",
-            value=(
-                "`/leave_lobby` - Leave this lobby\n"
-                "`/end_lobby` - End the current lobby (owner/mod/role only)\n"
-                "`/invite_lobby @user` - Invite a player to this lobby\n"
-                "`/kick_lobby @user` - Kick a player from this lobby\n"
-                "`/find_match` - Find players to join your game"
-            ),
-            inline=False
-        )
-        embed.set_footer(text="These commands are only available in lobby channels")
-    else:
-        embed.add_field(
-            name="🎮 Lobby Commands",
-            value=(
-                "`/create_game` - Create a new NightReign lobby\n"
-                "`/my_lobby` - Check your current lobby status\n"
-                "`/lobbies` - List all active lobbies\n"
-                "`/join_lobby <hash>` - Join a lobby using its hash\n"
-                "`/find_match` - Find players to join your game\n"
-                "`/help` or `/lobbyhelp` - See all commands"
-            ),
-            inline=False
-        )
-        embed.add_field(
-            name="💡 Tips",
-            value=(
-                "• Use `/lobbies` to see all available games\n"
-                "• Use `/find_match` to find players\n"
-                "• Lobbies auto-delete after 10 minutes if unused"
-            ),
-            inline=False
-        )
-        embed.set_footer(text="Use /<command> for slash commands or type them as text commands")
-    
-    await ctx.send(embed=embed)
 
 @bot.tree.command(name="help", description="Show all available commands")
 async def help_slash(interaction: discord.Interaction):
